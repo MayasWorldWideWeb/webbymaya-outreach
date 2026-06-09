@@ -1,15 +1,12 @@
 name: WebByMaya Outreach
 
 on:
-  # Run automatically every day at 9 AM Eastern
   schedule:
     - cron: '0 13 * * *'
-
-  # Allow manual trigger from GitHub UI or API (phone control)
   workflow_dispatch:
     inputs:
       zone:
-        description: 'Run a specific zone (leave blank for next in rotation)'
+        description: 'Specific zone (blank = next in rotation)'
         required: false
         default: ''
       sms_limit:
@@ -21,10 +18,9 @@ on:
         required: false
         default: '50'
       dry_run:
-        description: 'Dry run (find + enrich, no sends)'
+        description: 'Dry run - find and enrich only, no sends'
         required: false
         default: 'false'
-        type: boolean
 
 jobs:
   outreach:
@@ -41,121 +37,58 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install \
-            requests \
-            beautifulsoup4 \
-            ddgs \
-            sendgrid \
-            twilio
+        run: pip install requests beautifulsoup4 ddgs
 
-      - name: Create zone_state.json if missing
+      - name: Load zone state
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          python3 - <<'EOF'
-          import json, os, urllib.request
-          path = "zone_state.json"
-          if os.path.exists(path):
-              print("zone_state.json exists")
-          else:
-              # Download latest from Supabase
-              url = os.environ["SUPABASE_URL"] + "/rest/v1/zone_state?select=*&limit=1"
-              req = urllib.request.Request(url, headers={
-                  "apikey": os.environ["SUPABASE_KEY"],
-                  "Authorization": "Bearer " + os.environ["SUPABASE_KEY"],
-              })
-              try:
-                  rows = json.loads(urllib.request.urlopen(req).read())
-                  if rows:
-                      open(path,"w").write(rows[0]["state_json"])
-                      print("Loaded zone_state from Supabase")
-                      raise SystemExit(0)
-              except Exception as e:
-                  print(f"Could not load from Supabase: {e}")
-              # Default fresh state
-              state = {
-                  "zones": ["philly-north","philly-northeast","philly-near-ne",
-                            "philly-west","philly-south","philly-northwest","philly-center"],
-                  "current_index": 0,
-                  "completed": [],
-                  "last_find": None,
-                  "last_send": None
-              }
-              open(path,"w").write(json.dumps(state, indent=2))
-              print("Created default zone_state.json")
-          EOF
+        run: python3 ci_load_state.py
 
-      - name: Override zone if specified
+      - name: Set zone override
         if: ${{ github.event.inputs.zone != '' }}
-        run: |
-          python3 - <<EOF
-          import json
-          state = json.load(open("zone_state.json"))
-          zones = state["zones"]
-          zone  = "${{ github.event.inputs.zone }}"
-          if zone in zones:
-              state["current_index"] = zones.index(zone)
-              json.dump(state, open("zone_state.json","w"), indent=2)
-              print(f"Zone overridden to: {zone}")
-          EOF
+        env:
+          INPUT_ZONE: ${{ github.event.inputs.zone }}
+        run: python3 ci_set_zone.py
 
-      - name: Step 1 — Find prospects
-        if: ${{ github.event.inputs.dry_run != 'true' || github.event_name == 'schedule' }}
+      - name: Find prospects
         env:
           GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python3 scheduled_find.py
 
-      - name: Step 2 — Enrich emails
+      - name: Enrich emails
         run: |
           TODAY=$(date +%Y-%m-%d)
           CSV="prospects_${TODAY}.csv"
           if [ -f "$CSV" ]; then
             python3 enrich_emails.py --input "$CSV"
           else
-            echo "No prospects CSV for today, skipping enrich"
+            echo "No prospects CSV for today, skipping"
           fi
 
-      - name: Step 3 — Check bounces
+      - name: Check bounces
         env:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python3 check_bounces.py
 
-      - name: Step 4 — Send outreach
+      - name: Send outreach
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
-          TWILIO_ACCOUNT_SID:   ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN:    ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_PHONE_NUMBER:  ${{ secrets.TWILIO_PHONE_NUMBER }}
-          SENDGRID_API_KEY:     ${{ secrets.SENDGRID_API_KEY }}
-        run: |
-          python3 scheduled_send.py \
-            --sms-limit ${{ github.event.inputs.sms_limit || '200' }} \
-            --email-limit ${{ github.event.inputs.email_limit || '50' }}
+          TWILIO_ACCOUNT_SID:  ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN:   ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_PHONE_NUMBER: ${{ secrets.TWILIO_PHONE_NUMBER }}
+          SENDGRID_API_KEY:    ${{ secrets.SENDGRID_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 scheduled_send.py --sms-limit ${{ github.event.inputs.sms_limit || '200' }} --email-limit ${{ github.event.inputs.email_limit || '50' }}
 
-      - name: Save zone_state to Supabase
+      - name: Save zone state
         if: always()
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          python3 - <<'EOF'
-          import json, os, urllib.request, urllib.parse
-          if not os.path.exists("zone_state.json"):
-              raise SystemExit(0)
-          state_json = open("zone_state.json").read()
-          url  = os.environ["SUPABASE_URL"] + "/rest/v1/zone_state"
-          data = json.dumps([{"id":1,"state_json":state_json}]).encode()
-          req  = urllib.request.Request(url, data=data, headers={
-              "apikey": os.environ["SUPABASE_KEY"],
-              "Authorization": "Bearer " + os.environ["SUPABASE_KEY"],
-              "Content-Type": "application/json",
-              "Prefer": "resolution=merge-duplicates,return=minimal",
-          }, method="POST")
-          try:
-              urllib.request.urlopen(req)
-              print("zone_state saved to Supabase")
-          except Exception as e:
-              print(f"Could not save zone_state: {e}")
-          EOF
+        run: python3 ci_save_state.py
