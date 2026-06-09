@@ -1,0 +1,26 @@
+# Data files — stay local, go to Supabase instead
+prospects_*.csv
+sms_log_*.csv
+send_log_*.csv
+bounce_log.csv
+lead_status.csv
+followup_queue.csv
+zone_state.json
+search_progress.json
+search_output.log
+cron_run.log
+launchd.log
+dashboard.log
+notify.log
+weekly.log
+*.log
+
+# Secrets / tokens
+.env
+.seen_replies.json
+migrate_to_supabase.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
