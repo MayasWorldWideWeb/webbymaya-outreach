@@ -109,7 +109,7 @@ MIN_REVIEWS = 3
 # ---------------------------------------------------------------------------
 
 CITY_ZONES = {
-    # Philadelphia zones — split the city into manageable chunks
+    # Philadelphia zones
     "philly-center":    ["19102", "19103", "19106", "19107", "19146", "19147"],
     "philly-north":     ["19120", "19121", "19122", "19123", "19133", "19134", "19140", "19141"],
     "philly-northeast": ["19111", "19114", "19115", "19116", "19135", "19136", "19149", "19152", "19154"],
@@ -117,6 +117,16 @@ CITY_ZONES = {
     "philly-west":      ["19104", "19131", "19139", "19143", "19151"],
     "philly-south":     ["19112", "19145", "19148"],
     "philly-northwest":  ["19117", "19118", "19119", "19126", "19128", "19129", "19138", "19150"],
+
+    # South Jersey zones
+    "sj-camden":        ["08101", "08102", "08103", "08104", "08105", "08030", "08110"],
+    "sj-cherry-hill":   ["08002", "08003", "08034", "08033", "08043", "08108"],
+    "sj-mount-laurel":  ["08054", "08057", "08053", "08021"],
+
+    # Delaware zones
+    "de-wilmington":    ["19801", "19802", "19803", "19805", "19806", "19809"],
+    "de-newark":        ["19711", "19713", "19702", "19707", "19709"],
+    "de-dover":         ["19901", "19904"],
 }
 
 ZONE_DEFAULT_CITY = {
@@ -127,6 +137,12 @@ ZONE_DEFAULT_CITY = {
     "philly-west":      "Philadelphia, PA",
     "philly-south":     "Philadelphia, PA",
     "philly-northwest":  "Philadelphia, PA",
+    "sj-camden":        "Camden, NJ",
+    "sj-cherry-hill":   "Cherry Hill, NJ",
+    "sj-mount-laurel":  "Mount Laurel, NJ",
+    "de-wilmington":    "Wilmington, DE",
+    "de-newark":        "Newark, DE",
+    "de-dover":         "Dover, DE",
 }
 
 SOCIAL_DOMAINS = {
