@@ -53,9 +53,9 @@ jobs:
 
       - name: Find prospects
         env:
-          GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          YELP_API_KEY:  ${{ secrets.YELP_API_KEY }}
+          SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
         run: python3 scheduled_find.py
 
       - name: Enrich emails
