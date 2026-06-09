@@ -46,9 +46,8 @@ def main():
     print(f"{'='*60}\n")
 
     cmd = [
-        sys.executable, str(SCRIPT_DIR / "find_prospects.py"),
+        sys.executable, str(SCRIPT_DIR / "find_prospects_yelp.py"),
         "--zone", zone,
-        "--no-web-check",
     ]
 
     result = subprocess.run(cmd)

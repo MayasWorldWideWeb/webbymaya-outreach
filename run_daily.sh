@@ -8,11 +8,11 @@ PYTHON=/usr/bin/python3
 TODAY=$(date +%Y-%m-%d)
 
 # Load API keys (cron doesn't source .zshrc)
-export GOOGLE_PLACES_API_KEY="$(grep GOOGLE_PLACES_API_KEY ~/.zshrc | cut -d'"' -f2)"
 export TWILIO_ACCOUNT_SID="$(grep TWILIO_ACCOUNT_SID ~/.zshrc | cut -d'"' -f2)"
 export TWILIO_AUTH_TOKEN="$(grep TWILIO_AUTH_TOKEN ~/.zshrc | cut -d'"' -f2)"
 export TWILIO_PHONE_NUMBER="$(grep TWILIO_PHONE_NUMBER ~/.zshrc | cut -d'"' -f2)"
 export SENDGRID_API_KEY="$(grep SENDGRID_API_KEY ~/.zshrc | cut -d'"' -f2)"
+export YELP_API_KEY="$(grep YELP_API_KEY ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
 
 echo "" >> "$LOG"
 echo "========================================" >> "$LOG"
@@ -20,14 +20,25 @@ echo "  WebByMaya Daily Run — $TODAY" >> "$LOG"
 echo "  Started: $(date)" >> "$LOG"
 echo "========================================" >> "$LOG"
 
-# ── Step 1: Find prospects for next Philly zone ───────────────────────────
+# ── Step 1: Find new prospects (Yelp if key set, else use existing) ──────
 echo "" >> "$LOG"
-echo "[1/3] Finding prospects..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/scheduled_find.py" >> "$LOG" 2>&1
-FIND_EXIT=$?
+if [ -n "$YELP_API_KEY" ]; then
+    echo "[1/3] Finding new prospects via Yelp..." >> "$LOG"
+    $PYTHON "$SCRIPT_DIR/scheduled_find.py" >> "$LOG" 2>&1
+    FIND_EXIT=$?
+    if [ $FIND_EXIT -ne 0 ]; then
+        echo "[1/3] Yelp find failed — falling back to existing leads." >> "$LOG"
+        $PYTHON "$SCRIPT_DIR/build_unsent_csv.py" >> "$LOG" 2>&1
+        FIND_EXIT=$?
+    fi
+else
+    echo "[1/3] No Yelp key — using existing untexted leads..." >> "$LOG"
+    $PYTHON "$SCRIPT_DIR/build_unsent_csv.py" >> "$LOG" 2>&1
+    FIND_EXIT=$?
+fi
 
 if [ $FIND_EXIT -ne 0 ]; then
-    echo "[1/3] All Philly zones exhausted or error — skipping send." >> "$LOG"
+    echo "[1/3] No prospects remaining." >> "$LOG"
     echo "  Done: $(date)" >> "$LOG"
     exit 0
 fi
