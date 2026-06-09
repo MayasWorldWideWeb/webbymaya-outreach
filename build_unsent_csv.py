@@ -56,6 +56,17 @@ if not prospects:
     print("No untexted prospects found. All leads have been contacted.")
     raise SystemExit(0)
 
+# Sort: mobile-friendly categories first (sole proprietors > established businesses)
+MOBILE_PRIORITY = {
+    "nail salon": 1, "hair salon": 1, "massage": 1, "beauty salon": 1,
+    "barber": 1, "spa": 1, "photographer": 2, "personal trainer": 2,
+    "tattoo parlor": 2, "florist": 2, "cleaning service": 2,
+    "pet store": 3, "bakery": 3, "landscaping": 3,
+    "cafe": 4, "gym": 4,
+    "restaurant": 5, "auto repair": 6, "mechanic": 6,
+}
+prospects.sort(key=lambda r: MOBILE_PRIORITY.get(r.get("category","").lower(), 4))
+
 # Write today's CSV
 with open(OUT_PATH, "w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(f, fieldnames=list(prospects[0].keys()))
