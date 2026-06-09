@@ -23,6 +23,11 @@ SCRIPT_DIR = Path(__file__).parent
 API_KEY    = os.environ.get("YELP_API_KEY","")
 
 # Yelp category aliases → friendly names
+# Daily API budget (stay under 300 to stay free forever)
+DAILY_CALL_BUDGET  = 280   # 20 buffer below the 300 limit
+SEARCH_CALLS_MAX   = 20    # 20 search calls × 50 results = 1,000 businesses scanned
+DETAIL_CALLS_MAX   = 260   # 260 detail calls to check websites
+
 CATEGORIES = [
     ("hair",              "hair salon"),
     ("nailedsalons",      "nail salon"),
@@ -121,7 +126,9 @@ def load_seen_place_ids():
     return seen
 
 
-def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=200):
+_detail_calls_used = 0
+
+def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=50):
     """Search Yelp for one category in one location. Returns prospect list."""
     prospects = []
     offset = 0
@@ -158,8 +165,13 @@ def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=200):
             yelp_url    = biz.get("url","")
             maps_url    = f"https://www.yelp.com/biz/{biz_id}"
 
-            # Get actual website (costs 1 API call)
+            # Get actual website (costs 1 API call) — stop if budget hit
+            global _detail_calls_used
+            if _detail_calls_used >= DETAIL_CALLS_MAX:
+                print(f"  [budget] Detail call limit ({DETAIL_CALLS_MAX}) reached for today.")
+                return prospects
             _, website = get_business_website(biz_id)
+            _detail_calls_used += 1
             has_web, web_status = classify_website(website)
 
             # Only add if no real website
@@ -225,10 +237,14 @@ def main():
 
     all_prospects = []
     for yelp_cat, friendly_cat in CATEGORIES:
+        if _detail_calls_used >= DETAIL_CALLS_MAX:
+            print(f"\n[budget] Daily detail limit reached — stopping search.")
+            break
         print(f"\n[{friendly_cat}] searching...")
-        found = search_category(location, yelp_cat, friendly_cat, seen_ids, args.limit)
+        found = search_category(location, yelp_cat, friendly_cat, seen_ids)
         print(f"  → {len(found)} new prospects without websites")
         all_prospects.extend(found)
+    print(f"\nAPI calls used today: ~{20 + _detail_calls_used} of 300")
 
     if not all_prospects:
         print("\nNo new prospects found. Try a different location.")
