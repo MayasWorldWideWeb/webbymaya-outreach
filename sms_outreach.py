@@ -82,11 +82,36 @@ DEFAULT_LIMIT = 20
 MOBILE_TYPES = {"mobile", "prepaid"}
 
 SMS_TEMPLATE = (
-    "Hi! I'm Maya, a web designer in Philly. "
-    "I noticed {name} doesn't have a website — I build affordable sites for local businesses. "
-    "Free consult: webbymaya.com/book "
+    "Hi! I noticed {name} doesn't have a website yet. "
+    "I'm Maya — I build affordable sites for Philly businesses, starting at $799. "
+    "See what you'd get: {url} "
     "Reply STOP to opt out."
 )
+
+# Category → niche landing page
+CATEGORY_URLS = {
+    "hair salon":       "webbymaya.com/salons",
+    "nail salon":       "webbymaya.com/salons",
+    "beauty salon":     "webbymaya.com/salons",
+    "salon":            "webbymaya.com/salons",
+    "spa":              "webbymaya.com/salons",
+    "massage":          "webbymaya.com/salons",
+    "barber":           "webbymaya.com/salons",
+    "restaurant":       "webbymaya.com/restaurants",
+    "cafe":             "webbymaya.com/restaurants",
+    "bakery":           "webbymaya.com/restaurants",
+    "food":             "webbymaya.com/restaurants",
+    "auto repair":      "webbymaya.com/auto",
+    "mechanic":         "webbymaya.com/auto",
+    "auto":             "webbymaya.com/auto",
+}
+
+def get_url_for_category(category: str) -> str:
+    key = (category or "").strip().lower()
+    for k, url in CATEGORY_URLS.items():
+        if k in key:
+            return url
+    return "webbymaya.com/get-online"
 
 LOG_COLUMNS = [
     "timestamp", "name", "phone", "category",
@@ -294,7 +319,7 @@ def main():
         phone    = prospect.get("phone", "").strip()
         category = prospect.get("category", "").strip()
         e164     = to_e164(phone)
-        body     = SMS_TEMPLATE.format(name=name)
+        body     = SMS_TEMPLATE.format(name=name, url=get_url_for_category(category))
         ctype    = carrier_map.get(id(prospect), "unknown")
 
         print(f"[{i+1}/{len(to_send)}] {name}")

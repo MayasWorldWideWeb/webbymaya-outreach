@@ -50,8 +50,13 @@ $PYTHON "$SCRIPT_DIR/check_bounces.py" >> "$LOG" 2>&1
 
 # ── Step 4: Send SMS + emails ─────────────────────────────────────────────
 echo "" >> "$LOG"
-echo "[4/4] Sending outreach..." >> "$LOG"
+echo "[4/5] Sending outreach..." >> "$LOG"
 $PYTHON "$SCRIPT_DIR/scheduled_send.py" --sms-limit 200 --email-limit 50 >> "$LOG" 2>&1
+
+# ── Step 5: Send follow-ups ───────────────────────────────────────────────
+echo "" >> "$LOG"
+echo "[5/5] Sending follow-ups..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/send_followups.py" >> "$LOG" 2>&1
 
 echo "" >> "$LOG"
 echo "  Done: $(date)" >> "$LOG"
