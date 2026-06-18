@@ -5,23 +5,47 @@ Finds today's enriched CSV and sends up to --sms-limit texts
 and --email-limit emails from it.
 """
 import argparse
+import base64
 import csv
 import datetime
+import json
+import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 
 
+def sms_approved():
+    """Return True only if toll-free verification is APPROVED."""
+    sid   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    if not sid or not token:
+        return False
+    tf_verify_sid = "HH6c4e4cc29c8e87a8d14eef69c21df282"
+    creds = base64.b64encode(f"{sid}:{token}".encode()).decode()
+    req   = urllib.request.Request(
+        f"https://messaging.twilio.com/v1/Tollfree/Verifications/{tf_verify_sid}",
+        headers={"Authorization": f"Basic {creds}"})
+    try:
+        data   = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        status = data.get("status", "UNKNOWN")
+        return status in ("APPROVED", "TWILIO_APPROVED")
+    except Exception:
+        return False
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--sms-limit",   type=int, default=200)
-    p.add_argument("--email-limit", type=int, default=50)
+    p.add_argument("--email-limit", type=int, default=500)
     return p.parse_args()
 
 
 def find_csv():
+    """Return today's CSV, or build a combined unsent CSV from all historical enriched CSVs."""
     today = datetime.date.today().strftime("%Y-%m-%d")
     enriched = SCRIPT_DIR / f"prospects_{today}_enriched.csv"
     plain    = SCRIPT_DIR / f"prospects_{today}.csv"
@@ -29,11 +53,17 @@ def find_csv():
         return str(enriched)
     if plain.exists():
         return str(plain)
-    # Fall back to most recent CSV
+    # Build combined unsent list from ALL enriched CSVs (avoids running out of leads)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT_DIR / "build_unsent_csv.py")],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        built = SCRIPT_DIR / f"prospects_{today}.csv"
+        if built.exists():
+            return str(built)
+    # Last resort: most recent enriched CSV
     csvs = sorted(SCRIPT_DIR.glob("prospects_*_enriched.csv"), reverse=True)
-    if csvs:
-        return str(csvs[0])
-    csvs = sorted(SCRIPT_DIR.glob("prospects_*.csv"), reverse=True)
     if csvs:
         return str(csvs[0])
     return None
@@ -71,16 +101,20 @@ def main():
 
     # ── SMS ──────────────────────────────────────────────────────────────────
     if sms_ready > 0:
-        print(f"--- Sending SMS ---")
-        sms_cmd = [
-            sys.executable, str(SCRIPT_DIR / "sms_outreach.py"),
-            "--input", csv_path,
-            "--limit", str(args.sms_limit),
-            "--workers", "20",
-        ]
-        result = subprocess.run(sms_cmd)
-        if result.returncode != 0:
-            print("[scheduled_send] SMS step failed.")
+        if not sms_approved():
+            print("[scheduled_send] SMS blocked — toll-free verification not approved yet.")
+        else:
+            print(f"--- Sending SMS ---")
+            sms_cmd = [
+                sys.executable, str(SCRIPT_DIR / "sms_outreach.py"),
+                "--input", csv_path,
+                "--limit", str(args.sms_limit),
+                "--workers", "20",
+                "--no-lookup",
+            ]
+            result = subprocess.run(sms_cmd)
+            if result.returncode != 0:
+                print("[scheduled_send] SMS step failed.")
     else:
         print("No SMS leads ready to send.")
 

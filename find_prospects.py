@@ -122,11 +122,29 @@ CITY_ZONES = {
     "sj-camden":        ["08101", "08102", "08103", "08104", "08105", "08030", "08110"],
     "sj-cherry-hill":   ["08002", "08003", "08034", "08033", "08043", "08108"],
     "sj-mount-laurel":  ["08054", "08057", "08053", "08021"],
+    "sj-gloucester":    ["08028", "08096", "08080", "08094", "08012", "08093"],
+    "sj-voorhees":      ["08043", "08033", "08108", "08107", "08078", "08077"],
 
     # Delaware zones
     "de-wilmington":    ["19801", "19802", "19803", "19805", "19806", "19809"],
     "de-newark":        ["19711", "19713", "19702", "19707", "19709"],
     "de-dover":         ["19901", "19904"],
+
+    # Montgomery County PA
+    "pa-montco-south":  ["19401", "19403", "19405", "19406", "19428", "19002", "19422"],
+    "pa-montco-east":   ["19046", "19001", "19044", "19090", "19038", "19072", "19096"],
+    "pa-montco-north":  ["19446", "19454", "19440", "19047", "18974", "18976", "19462"],
+
+    # Delaware County PA
+    "pa-delco-inner":   ["19082", "19026", "19003", "19041", "19050", "19081", "19023"],
+    "pa-delco-outer":   ["19063", "19013", "19014", "19079", "19032", "19061", "19064"],
+
+    # Bucks County PA
+    "pa-bucks-lower":   ["19054", "19055", "19056", "19057", "19007", "19067", "19047"],
+    "pa-bucks-upper":   ["18901", "18902", "18974", "18976", "18914", "18944", "18940"],
+
+    # Chester County PA
+    "pa-chester":       ["19380", "19382", "19320", "19460", "19341", "19335", "19425"],
 }
 
 ZONE_DEFAULT_CITY = {
@@ -140,9 +158,19 @@ ZONE_DEFAULT_CITY = {
     "sj-camden":        "Camden, NJ",
     "sj-cherry-hill":   "Cherry Hill, NJ",
     "sj-mount-laurel":  "Mount Laurel, NJ",
+    "sj-gloucester":    "Gloucester County, NJ",
+    "sj-voorhees":      "Voorhees, NJ",
     "de-wilmington":    "Wilmington, DE",
     "de-newark":        "Newark, DE",
     "de-dover":         "Dover, DE",
+    "pa-montco-south":  "Norristown, PA",
+    "pa-montco-east":   "Abington, PA",
+    "pa-montco-north":  "Lansdale, PA",
+    "pa-delco-inner":   "Upper Darby, PA",
+    "pa-delco-outer":   "Media, PA",
+    "pa-bucks-lower":   "Levittown, PA",
+    "pa-bucks-upper":   "Doylestown, PA",
+    "pa-chester":       "West Chester, PA",
 }
 
 SOCIAL_DOMAINS = {
@@ -568,6 +596,8 @@ def parse_args():
                         help='City label for zip searches (default auto-detected from zone, or "Philadelphia, PA")')
     parser.add_argument("--zip-radius", type=int, default=2000, metavar="METERS",
                         help="Search radius per zip code in metres (default: 2000 ≈ 1.25 miles)")
+    parser.add_argument("--output", metavar="PATH",
+                        help="Output CSV path (default: SCRIPT_DIR/prospects_YYYY-MM-DD.csv)")
     return parser.parse_args()
 
 
@@ -656,7 +686,7 @@ def run():
                 print(f"  [ERROR] job failed: {exc}")
 
     today = datetime.date.today().strftime("%Y-%m-%d")
-    output_path = f"prospects_{today}.csv"
+    output_path = args.output if args.output else str(Path(__file__).parent / f"prospects_{today}.csv")
     with open(output_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
         writer.writeheader()

@@ -65,6 +65,12 @@ try:
 except ImportError:
     sys.exit("ERROR: 'ddgs' not found.\nInstall with:  pip3 install ddgs")
 
+try:
+    from playwright.sync_api import sync_playwright as _pw
+    _PLAYWRIGHT_OK = True
+except ImportError:
+    _PLAYWRIGHT_OK = False
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -181,6 +187,23 @@ def should_skip_url(url: str) -> bool:
 # Core enrichment logic for one business
 # ---------------------------------------------------------------------------
 
+def _playwright_fetch(url: str) -> str:
+    """Render a JS-heavy page with Playwright and return its text content."""
+    if not _PLAYWRIGHT_OK:
+        return ""
+    try:
+        with _pw() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page    = browser.new_page()
+            page.goto(url, timeout=15000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            text = page.inner_text("body")
+            browser.close()
+            return text
+    except Exception:
+        return ""
+
+
 def find_email_for_business(name: str, city: str) -> str:
     query = f'"{name}" {city} contact email'
 
@@ -206,6 +229,17 @@ def find_email_for_business(name: str, city: str) -> str:
         all_emails.extend(emails)
         if all_emails:
             break
+
+    # Playwright fallback — renders JS-heavy pages (React/Vue directories) that requests misses
+    if not all_emails and _PLAYWRIGHT_OK and urls:
+        for url in urls[:2]:
+            time.sleep(FETCH_DELAY)
+            text = _playwright_fetch(url)
+            if text:
+                emails = extract_emails_from_text(text)
+                all_emails.extend(emails)
+                if all_emails:
+                    break
 
     if not all_emails:
         yelp_query = name.lower().replace(" ", "-") + "-" + city.lower().split(",")[0].replace(" ", "-")

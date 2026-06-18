@@ -73,20 +73,13 @@ except ImportError:
 
 ACCOUNT_SID  = os.environ.get("TWILIO_ACCOUNT_SID", "")
 AUTH_TOKEN   = os.environ.get("TWILIO_AUTH_TOKEN", "")
+API_KEY      = os.environ.get("TWILIO_API_KEY", "")
+API_SECRET   = os.environ.get("TWILIO_API_SECRET", "")
 FROM_NUMBER  = os.environ.get("TWILIO_PHONE_NUMBER", "")
 
 SEND_DELAY   = 1      # seconds between sends (Twilio rate limit: ~1/sec per number)
+
 DEFAULT_LIMIT = 20
-
-# Mobile-type values from Twilio Lookup v2 that we'll text
-MOBILE_TYPES = {"mobile", "prepaid"}
-
-SMS_TEMPLATE = (
-    "Hi! I noticed {name} doesn't have a website yet. "
-    "I'm Maya — I build affordable sites for Philly businesses, starting at $799. "
-    "See what you'd get: {url} "
-    "Reply STOP to opt out."
-)
 
 # Category → niche landing page
 CATEGORY_URLS = {
@@ -105,6 +98,40 @@ CATEGORY_URLS = {
     "mechanic":         "webbymaya.com/auto",
     "auto":             "webbymaya.com/auto",
 }
+
+# Niche-specific SMS templates — more relevant = more replies
+_SMS_TEMPLATES = {
+    "salon": (
+        "Hi {name}! Clients search for salons online before they book. "
+        "I build salon sites with your menu + booking from $799, live in 7 days. "
+        "{url} · Reply STOP to opt out."
+    ),
+    "restaurant": (
+        "Hi {name}! Hungry locals search online before they pick a spot. "
+        "I build restaurant sites with your menu + hours from $799, live in 7 days. "
+        "{url} · Reply STOP to opt out."
+    ),
+    "auto": (
+        "Hi {name}! Most people Google auto shops before they call. "
+        "I build shop sites with your services + reviews from $799, live in 7 days. "
+        "{url} · Reply STOP to opt out."
+    ),
+    "default": (
+        "Hi {name}! No website yet? "
+        "I build Philly business sites from $799, live in 7 days. "
+        "{url} · Reply STOP to opt out."
+    ),
+}
+
+def _get_sms_template(category: str) -> str:
+    key = (category or "").strip().lower()
+    if any(k in key for k in ("salon", "spa", "barber", "massage", "nail", "hair", "beauty")):
+        return _SMS_TEMPLATES["salon"]
+    if any(k in key for k in ("restaurant", "cafe", "bakery", "food", "pizza", "diner")):
+        return _SMS_TEMPLATES["restaurant"]
+    if any(k in key for k in ("auto", "mechanic", "repair", "tire", "oil")):
+        return _SMS_TEMPLATES["auto"]
+    return _SMS_TEMPLATES["default"]
 
 def get_url_for_category(category: str) -> str:
     key = (category or "").strip().lower()
@@ -136,36 +163,60 @@ def to_e164(phone: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Free phone type detection (phonenumbers library — no API cost)
+# ---------------------------------------------------------------------------
+
+try:
+    import phonenumbers
+    from phonenumbers import number_type as pn_type, PhoneNumberType
+    _PN_OK = True
+except ImportError:
+    _PN_OK = False
+
+def classify_phone(e164: str) -> str:
+    """
+    Classify a US phone number using the free phonenumbers library.
+
+    Limitation: US uses number pooling, so FIXED_LINE_OR_MOBILE is returned
+    for most valid US numbers — the library can't tell mobile vs landline
+    from the digits alone. We use it to catch definite non-mobile types:
+      - TOLL_FREE (800/888/877 etc.) → skip
+      - PREMIUM_RATE (900 etc.)      → skip
+      - VOIP                         → skip
+      - FIXED_LINE_OR_MOBILE         → assume sendable (best effort)
+    """
+    if not _PN_OK or not e164:
+        return "unknown"
+    try:
+        n  = phonenumbers.parse(e164, None)
+        if not phonenumbers.is_valid_number(n):
+            return "invalid"
+        nt = pn_type(n)
+        if nt == PhoneNumberType.TOLL_FREE:
+            return "toll_free"
+        if nt == PhoneNumberType.PREMIUM_RATE:
+            return "premium"
+        if nt == PhoneNumberType.VOIP:
+            return "voip"
+        if nt == PhoneNumberType.SHARED_COST:
+            return "shared_cost"
+        # MOBILE, FIXED_LINE, FIXED_LINE_OR_MOBILE → treat as sendable
+        return "mobile"
+    except Exception:
+        return "unknown"
+
+# ---------------------------------------------------------------------------
 # Twilio helpers
 # ---------------------------------------------------------------------------
 
 def get_client() -> TwilioClient:
-    missing = [k for k, v in [
-        ("TWILIO_ACCOUNT_SID", ACCOUNT_SID),
-        ("TWILIO_AUTH_TOKEN", AUTH_TOKEN),
-        ("TWILIO_PHONE_NUMBER", FROM_NUMBER),
-    ] if not v]
-    if missing:
-        sys.exit(
-            f"ERROR: Missing environment variable(s): {', '.join(missing)}\n"
-            "Add them to ~/.zshrc and run:  source ~/.zshrc"
-        )
-    return TwilioClient(ACCOUNT_SID, AUTH_TOKEN)
-
-
-def lookup_carrier_type(client: TwilioClient, e164: str) -> str:
-    """
-    Returns the line type string from Twilio Lookup v2.
-    Returns 'unknown' on error. Costs ~$0.005 per lookup.
-    """
-    try:
-        result = client.lookups.v2.phone_numbers(e164).fetch(
-            fields=["line_type_intelligence"]
-        )
-        info = result.line_type_intelligence or {}
-        return (info.get("type") or "unknown").lower()
-    except Exception:
-        return "unknown"
+    if not FROM_NUMBER:
+        sys.exit("ERROR: Missing TWILIO_PHONE_NUMBER. Add to ~/.zshrc and run: source ~/.zshrc")
+    if API_KEY and API_SECRET and ACCOUNT_SID:
+        return TwilioClient(API_KEY, API_SECRET, ACCOUNT_SID)
+    if ACCOUNT_SID and AUTH_TOKEN:
+        return TwilioClient(ACCOUNT_SID, AUTH_TOKEN)
+    sys.exit("ERROR: Missing Twilio credentials.")
 
 
 def send_sms(client: TwilioClient, to: str, body: str) -> tuple[bool, str]:
@@ -233,8 +284,29 @@ def parse_args():
     return parser.parse_args()
 
 
+def sms_approved():
+    """Return True only if toll-free verification is APPROVED."""
+    import base64, json, urllib.request
+    tf_verify_sid = "HH6c4e4cc29c8e87a8d14eef69c21df282"
+    if not ACCOUNT_SID or not AUTH_TOKEN:
+        return False
+    creds = base64.b64encode(f"{ACCOUNT_SID}:{AUTH_TOKEN}".encode()).decode()
+    req   = urllib.request.Request(
+        f"https://messaging.twilio.com/v1/Tollfree/Verifications/{tf_verify_sid}",
+        headers={"Authorization": f"Basic {creds}"})
+    try:
+        data   = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        status = data.get("status", "UNKNOWN")
+        return status in ("APPROVED", "TWILIO_APPROVED")
+    except Exception:
+        return False
+
+
 def main():
     args = parse_args()
+
+    if not args.dry_run and not sms_approved():
+        sys.exit("[sms_outreach] BLOCKED — toll-free verification not approved yet. No SMS sent.")
 
     if not os.path.exists(args.input):
         sys.exit(f"ERROR: File not found: {args.input}")
@@ -260,45 +332,29 @@ def main():
 
     client = None if args.dry_run else get_client()
 
-    # ── Carrier lookup ────────────────────────────────────────────────────────
-    if not args.no_lookup and not args.dry_run:
-        print(f"Running carrier lookup on {len(to_send)} numbers "
-              f"({args.workers} parallel workers) ...")
-        lock = threading.Lock()
-        done_count = [0]
-
-        def do_lookup(prospect):
-            e164 = to_e164(prospect.get("phone", ""))
-            if not e164:
-                return prospect, "invalid"
-            carrier_type = lookup_carrier_type(client, e164)
-            with lock:
-                done_count[0] += 1
-                print(f"  [{done_count[0]}/{len(to_send)}] "
-                      f"{prospect.get('name', '')[:30]} → {carrier_type}")
-            return prospect, carrier_type
-
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futures = {pool.submit(do_lookup, p): p for p in to_send}
-            carrier_map = {}
-            for f in as_completed(futures):
-                prospect, ctype = f.result()
-                carrier_map[id(prospect)] = ctype
-
-        # Filter to mobile only
-        mobile = [p for p in to_send if carrier_map.get(id(p)) in MOBILE_TYPES]
-        landline = [p for p in to_send if carrier_map.get(id(p)) not in MOBILE_TYPES
-                    and carrier_map.get(id(p)) not in (None,)]
-
-        # Mark landlines in CSV now
-        for p in landline:
-            p["sms_status"] = carrier_map.get(id(p), "non-mobile")
-        save_prospects(prospects, fieldnames, args.input)
-
-        print(f"\n  {len(mobile)} mobile  |  {len(landline)} landline/VoIP/other (marked, skipped)\n")
-        to_send = mobile
-    else:
-        carrier_map = {}
+    # ── Phone type classification (free — phonenumbers library, no API cost) ──
+    carrier_map = {}
+    if not args.dry_run:
+        if _PN_OK:
+            print(f"Classifying {len(to_send)} numbers (free phonenumbers library) ...")
+            landline = []
+            mobile   = []
+            for p in to_send:
+                e164  = to_e164(p.get("phone", ""))
+                ctype = classify_phone(e164) if e164 else "invalid"
+                carrier_map[id(p)] = ctype
+                if ctype in ("landline", "voip", "invalid"):
+                    p["sms_status"] = ctype
+                    landline.append(p)
+                else:
+                    mobile.append(p)
+            if landline:
+                save_prospects(prospects, fieldnames, args.input)
+            print(f"  {len(mobile)} mobile  |  {len(landline)} landline/VoIP/invalid (skipped, free)\n")
+            to_send = mobile
+        else:
+            print("  [INFO] phonenumbers not installed — sending to all numbers.")
+            print("  [INFO] Run:  pip3 install phonenumbers  to enable free landline filtering.\n")
 
     if not to_send:
         print("No mobile numbers to text. Done.")
@@ -319,7 +375,7 @@ def main():
         phone    = prospect.get("phone", "").strip()
         category = prospect.get("category", "").strip()
         e164     = to_e164(phone)
-        body     = SMS_TEMPLATE.format(name=name, url=get_url_for_category(category))
+        body     = _get_sms_template(category).format(name=name, url=get_url_for_category(category))
         ctype    = carrier_map.get(id(prospect), "unknown")
 
         print(f"[{i+1}/{len(to_send)}] {name}")

@@ -56,10 +56,10 @@ campaign_data = {
     ),
     "MessageSamples": json.dumps([
         "Hi! I noticed [Business Name] doesn't have a website yet. I'm Maya, a web designer "
-        "based in Philly. I build affordable sites for local businesses. Free 20-min call: "
+        "based in Philly. I build affordable sites for local businesses. Fill out my form: "
         "https://webbymaya.com/book Reply STOP to opt out.",
-        "Hi! This is Maya from WebByMaya following up. I'd love to chat about getting "
-        "[Business Name] online this week. Free call: https://webbymaya.com/book "
+        "Hi! This is Maya from WebByMaya following up. I'd love to get [Business Name] "
+        "online this week. Fill out my quick form: https://webbymaya.com/book "
         "Reply STOP to opt out."
     ]),
     "UsAppToPersonUsecase": "MIXED",

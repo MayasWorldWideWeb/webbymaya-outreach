@@ -18,7 +18,7 @@ STOP_WORDS = {"stop","stopall","unsubscribe","cancel","end","quit"}
 FOLLOWUP_DAY4 = (
     "Hi again! Maya from WebByMaya. Just wanted to follow up — "
     "I help Philly businesses get online for $799, live in 7 days. "
-    "Happy to answer any questions on a quick free call: webbymaya.com/book "
+    "Happy to answer any questions — fill out my quick form: webbymaya.com/book "
     "Reply STOP to opt out."
 )
 

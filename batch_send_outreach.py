@@ -83,17 +83,19 @@ def _require(package: str, install_hint: str):
 # Configuration
 # ---------------------------------------------------------------------------
 
-SENDER_EMAIL = "mayas.worldwide.web@gmail.com"
+SENDER_EMAIL = "maya@webbymaya.com"
 SENDER_NAME  = "Maya Sierra"
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
+BREVO_API_KEY    = os.environ.get("BREVO_API_KEY", "")
+GMAIL_TOKEN_PATH = Path.home() / ".webbymaaya/gmail_token.json"
 
 # Notion API base
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION  = "2022-06-28"
 
 # Delay (seconds) between sends to stay well clear of spam filters
-SEND_DELAY_SECONDS = 30
+SEND_DELAY_SECONDS = 15
 
 # Load suppressed (bounced/blocked) emails so we never retry them
 def _load_suppressed() -> set:
@@ -106,14 +108,156 @@ def _load_suppressed() -> set:
 
 SUPPRESSED_EMAILS = _load_suppressed()
 
-# Default maximum emails per run
-DEFAULT_LIMIT = 10
+def _load_all_sent() -> set:
+    """Return every email already sent across ALL historical send logs — prevents cross-CSV duplicates."""
+    sent = set()
+    for p in sorted(Path(__file__).parent.glob("send_log_*.csv")):
+        with open(p, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("status") == "sent":
+                    e = row.get("email_sent_to", "").strip().lower()
+                    if e:
+                        sent.add(e)
+    return sent
+
+ALREADY_SENT_EMAILS = _load_all_sent()
+
+_DISPOSABLE_DOMAINS = None  # type: Optional[set]
+
+def _load_disposable_domains() -> set:
+    """
+    Download the disposable-email-domains blocklist (free, open-source).
+    Falls back to an empty set if network fails.
+    github.com/disposable-email-domains/disposable-email-domains
+    """
+    import urllib.request
+    try:
+        url = "https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/master/disposable_email_blocklist.conf"
+        data = urllib.request.urlopen(url, timeout=8).read().decode()
+        return {line.strip().lower() for line in data.splitlines() if line.strip() and not line.startswith("#")}
+    except Exception:
+        return set()
+
+def validate_email(email: str) -> tuple[bool, str]:
+    """
+    Free email validation. Three checks:
+      1. Basic format
+      2. DNS MX record — domain must have a mail server (stronger than A record)
+      3. Disposable/throwaway domain blocklist
+    Fails open on network errors so temporary DNS hiccups never block sends.
+    """
+    global _DISPOSABLE_DOMAINS
+    import re as _re
+
+    # 1. Format
+    if not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return False, "invalid format"
+
+    domain = email.split("@")[-1].lower()
+
+    # 2. MX record check — confirms domain actually accepts mail (not just exists)
+    try:
+        import dns.resolver
+        dns.resolver.resolve(domain, "MX")
+    except Exception as _dns_err:
+        err_name = type(_dns_err).__name__
+        if "NXDOMAIN" in err_name or "NoNameservers" in err_name:
+            return False, "domain doesn't exist"
+        if "NoAnswer" in err_name:
+            return False, "domain has no mail server"
+        # Network timeout / other transient error → fail-open
+
+    # 3. Disposable domain check
+    if _DISPOSABLE_DOMAINS is None:
+        _DISPOSABLE_DOMAINS = _load_disposable_domains()
+    if domain in _DISPOSABLE_DOMAINS:
+        return False, "disposable/throwaway address"
+
+    return True, ""
+
+# Platform/SaaS domains that forward to the software company, not the business owner
+SKIP_DOMAINS = {
+    "fresha.com", "birdeye.com", "nailsalonbeauty.com", "thryv.com",
+    "yext.com", "yelp.com", "google.com", "facebook.com", "instagram.com",
+    "squareup.com", "toasttab.com", "grubhub.com", "doordash.com",
+    "opentable.com", "mindbodyonline.com", "vagaro.com", "booker.com",
+    "schedulicity.com", "appointy.com", "setmore.com", "acuityscheduling.com",
+    "zendesk.com", "hubspot.com", "mailchimp.com", "constantcontact.com",
+}
+
+# Default maximum emails per run — uses all three free providers (SG 100 + Brevo 300 + Gmail 500)
+DEFAULT_LIMIT = 900
 
 # ---------------------------------------------------------------------------
 # Email template
 # ---------------------------------------------------------------------------
 
-EMAIL_SUBJECT = "Your next customer can't find you online"
+EMAIL_SUBJECT = "I built {business_name} a website"  # fallback only
+
+# Category-specific subject lines
+_SUBJECT_MAP = {
+    "hair salon":       "I built {name} a website — want to see it?",
+    "nail salon":       "I built {name} a nail salon website",
+    "beauty salon":     "I built {name} a website — take a look",
+    "spa":              "I built {name} a spa website — take a look",
+    "lash":             "I built {name} a website — take a look",
+    "lash studio":      "I built {name} a website — take a look",
+    "barber":           "I built {name} a barber website — take a look",
+    "barbershop":       "I built {name} a barbershop website",
+    "massage":          "I built {name} a website — take a look",
+    "wax":              "I built {name} a website — take a look",
+    "threading":        "I built {name} a website — take a look",
+    "esthetician":      "I built {name} a website — take a look",
+    "skincare":         "I built {name} a skincare website — take a look",
+    "restaurant":       "I built {name} a restaurant website",
+    "cafe":             "I put together a website for {name}",
+    "coffee":           "I put together a website for {name}",
+    "bakery":           "I built {name} a bakery website",
+    "pizza":            "I built {name} a website — take a look",
+    "bar":              "I built {name} a website — check it out",
+    "food truck":       "I built {name} a food truck website",
+    "diner":            "I built {name} a diner website",
+    "auto repair":      "{name} is missing from Google — I built a site",
+    "mechanic":         "I built {name} a website — take a look",
+    "auto shop":        "I built {name} a website — take a look",
+    "plumber":          "I built {name} a plumbing website",
+    "plumbing":         "I built {name} a plumbing website",
+    "electrician":      "I built {name} a website — take a look",
+    "landscaping":      "I built {name} a landscaping website",
+    "lawn":             "I built {name} a lawn care website",
+    "cleaning":         "I put together a website for {name}",
+    "cleaning service": "I put together a website for {name}",
+    "roofing":          "I built {name} a roofing website",
+    "hvac":             "I built {name} a website — take a look",
+    "gym":              "I built {name} a gym website",
+    "fitness":          "I built {name} a fitness website",
+    "yoga":             "I built {name} a yoga studio website",
+    "personal trainer": "I built {name} a trainer website",
+    "tattoo":           "I built {name} a tattoo shop website",
+    "tattoo parlor":    "I built {name} a tattoo shop website",
+    "florist":          "I built {name} a florist website",
+    "photographer":     "I built {name} a photography website",
+    "photography":      "I built {name} a photography website",
+    "pet grooming":     "I built {name} a pet grooming website",
+    "pet":              "I built {name} a website — take a look",
+    "daycare":          "I built {name} a daycare website",
+    "childcare":        "I built {name} a childcare website",
+    "nail":             "I built {name} a nail salon website",
+}
+
+
+def get_subject(name: str, category: str) -> str:
+    """Return a category-specific email subject, or the generic fallback."""
+    cat = (category or "").strip().lower()
+    template = _SUBJECT_MAP.get(cat)
+    if not template:
+        for key, tpl in _SUBJECT_MAP.items():
+            if key in cat:
+                template = tpl
+                break
+    if template:
+        return template.replace("{name}", name)
+    return f"I built {name} a website"
 
 # HTML template path — sits next to this script's parent directory
 _SCRIPT_DIR   = Path(__file__).parent
@@ -121,22 +265,17 @@ _TEMPLATE_PATH = _SCRIPT_DIR.parent / "webbymaaya-email-template.html"
 
 # Plain-text fallback (shown by email clients that block HTML)
 EMAIL_PLAIN_TEMPLATE = """\
-Hi there,
+{mockup_hero}I put together a website for {business_name} — you don't have one online yet, \
+and anyone in {city} searching for a {business_type} right now can't find you.
 
-I noticed {business_name} doesn't have a website yet. Right now, anyone in \
-Philadelphia searching for a {business_type} can't find you online — no Google \
-listing, no hours, no way to reach you except word of mouth.
+{social_proof}I'm Maya, a web designer based in Philly. If you want it live, it's $799 flat \
+and ready in 7 days. No monthly fees, no tech work on your end — I handle everything.
 
-I'm Maya — a web designer based right here in Philly. I build clean, \
-fast, mobile-ready websites for local businesses starting at an affordable price.
-
-Book a free 20-min call: https://webbymaya.com/book
-
-Or just reply to this email — I check it daily.
+Reply here or fill out my 2-minute form to get started:
+https://webbymaya.com/book
 
 Maya Sierra
-Web Designer · WebByMaya.com
-mayas.worldwide.web@gmail.com
+WebByMaya.com · maya@webbymaya.com
 """
 
 # Category → friendly description map
@@ -172,37 +311,120 @@ def _friendly_type(category: str) -> str:
     return _TYPE_MAP.get(key, key or "business")
 
 
-def build_email_body(name: str, category: str) -> tuple[str, str]:
-    """Return (plain_text, html) tuple for the given business.
+def _get_mockup_url(name: str, category: str, phone: str = "", city: str = "Philadelphia, PA", address: str = "") -> str:
+    """Upload a personalized mockup to Supabase. Returns public URL or ''."""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_SCRIPT_DIR))
+        from mockup_uploader import upload_mockup
+        return upload_mockup(name, category, phone, city)
+    except Exception:
+        return ""
 
-    The HTML version uses the branded WebByMaya template with {business_name}
-    and {business_type} placeholders filled in. Falls back to inline HTML if
-    the template file is missing.
-    """
-    friendly = _friendly_type(category)
+
+def build_email_body(name: str, category: str, phone: str = "", city: str = "Philadelphia, PA",
+                     mockup_url: str = "", rating: str = "", review_count: str = "") -> tuple[str, str]:
+    """Return (plain_text, html) tuple for the given business."""
+    friendly     = _friendly_type(category)
+    city_display = city.split(",")[0].strip() if city else "your area"
+
+    # ── Social proof line (rating + review count) ─────────────────────────
+    social_proof_plain = ""
+    social_proof_html  = ""
+    try:
+        r  = float(rating) if rating else 0.0
+        rc = int(review_count) if review_count else 0
+        if r >= 4.0:
+            stars = f"{r:g}-star rating"
+            reviews_txt = f" with {rc} reviews" if rc > 0 else ""
+            social_proof_plain = (
+                f"I noticed {name} has a {stars}{reviews_txt} — "
+                f"you deserve a site that shows it off.\n\n"
+            )
+            social_proof_html = (
+                f'<p style="margin:0 0 20px;font-size:15px;line-height:1.7;'
+                f'color:#666666;font-style:italic;border-left:3px solid #C9A96E;'
+                f'padding-left:14px;">'
+                f'I noticed <strong>{name}</strong> has a <strong>{stars}</strong>'
+                + (f' with <strong>{rc} reviews</strong>' if rc > 0 else '')
+                + ' — you deserve a site that shows it off.</p>'
+            )
+    except (ValueError, TypeError):
+        pass
+
+    # ── Mockup hero block ─────────────────────────────────────────────────
+    mockup_hero_plain = ""
+    mockup_hero_html  = ""
+    if mockup_url:
+        mockup_hero_plain = f"I built a website preview for {name}:\n{mockup_url}\n\n"
+
+        # Try to capture a Playwright screenshot to embed as inline image
+        screenshot_img_tag = ""
+        try:
+            from capture_mockup_screenshot import screenshot_html_for_email
+            b64 = screenshot_html_for_email(name, category)
+            if b64:
+                screenshot_img_tag = (
+                    f'<a href="{mockup_url}" style="display:block;text-decoration:none;margin-bottom:10px;">'
+                    f'<img src="data:image/png;base64,{b64}" alt="Website preview for {name}" '
+                    f'width="540" style="width:100%;max-width:540px;border-radius:6px;display:block;'
+                    f'border:1px solid #1e1e1e;" /></a>'
+                )
+        except Exception:
+            pass
+
+        mockup_hero_html = (
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+            ' style="margin:0 0 28px;">'
+            '<tr><td style="background:#0d0d0d;border-radius:8px;padding:20px 28px;text-align:center;">'
+            f'<div style="font-family:Arial,sans-serif;font-size:11px;text-transform:uppercase;'
+            f'letter-spacing:2px;color:#C9A96E;margin-bottom:12px;">I built this for {name}</div>'
+            + screenshot_img_tag
+            + f'<a href="{mockup_url}" style="display:inline-block;background:#C9A96E;color:#0d0d0d;'
+            f'padding:14px 32px;border-radius:6px;font-weight:800;font-size:15px;'
+            f'font-family:Arial,sans-serif;text-decoration:none;letter-spacing:0.3px;">'
+            '&#128064;&nbsp; See Your Website Preview &rarr;'
+            '</a>'
+            '<div style="font-family:Arial,sans-serif;font-size:12px;color:#666;margin-top:10px;">'
+            'Ready to launch — takes 2 minutes to look at</div>'
+            '</td></tr></table>'
+        )
 
     plain = EMAIL_PLAIN_TEMPLATE.format(
         business_name=name,
         business_type=friendly,
+        city=city_display,
+        mockup_hero=mockup_hero_plain,
+        social_proof=social_proof_plain,
     )
 
     if _TEMPLATE_PATH.exists():
         raw_html = _TEMPLATE_PATH.read_text(encoding="utf-8")
-        html = raw_html.replace("{business_name}", name).replace("{business_type}", friendly)
+        html = (raw_html
+                .replace("{business_name}", name)
+                .replace("{business_type}",  friendly)
+                .replace("{city}",           city_display)
+                .replace("{mockup_hero}",    mockup_hero_html)
+                .replace("{social_proof}",   social_proof_html))
     else:
-        # Minimal inline fallback so sends still work if template file is moved
-        html = f"""<html><body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto">
-<p>Hi there,</p>
-<p>I noticed <strong>{name}</strong> doesn't have a website yet. Right now anyone
-searching for a {friendly} in Philadelphia can't find you online.</p>
-<p>I'm Maya — a web designer based right here in Philly. I build clean, affordable sites
-for local businesses.</p>
-<p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#111;
-padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:3px;
-display:inline-block">Book a free 20-min call →</a></p>
-<p style="color:#888;font-size:12px">Or just reply — I check email daily.<br><br>
-Maya Sierra · Web Designer · <a href="https://webbymaya.com">WebByMaya.com</a></p>
-</body></html>"""
+        html = (
+            f'<html><body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto">'
+            + (f'<p style="background:#0d0d0d;padding:20px;border-radius:8px;text-align:center">'
+               f'<a href="{mockup_url}" style="background:#C9A96E;color:#111;padding:12px 24px;'
+               f'text-decoration:none;font-weight:bold;border-radius:3px;display:inline-block">'
+               f'&#128064; See Your Website Preview &rarr;</a></p>' if mockup_url else '')
+            + (f'<p><em>{social_proof_plain.strip()}</em></p>' if social_proof_plain else '')
+            + f'<p>I put together a website for <strong>{name}</strong> — you don\'t have one online yet, '
+            f'and anyone in {city_display} searching for a {friendly} right now can\'t find you.</p>'
+            f'<p>I\'m Maya, a web designer based in Philly. If you want it live, it\'s <strong>$799 flat</strong> '
+            f'and ready in 7 days. No monthly fees, no tech work on your end — I handle everything.</p>'
+            f'<p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#111;'
+            f'padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:3px;'
+            f'display:inline-block">Get started — 2 min form &rarr;</a></p>'
+            f'<p style="color:#888;font-size:12px">Or just reply to this email.<br><br>'
+            f'Maya Sierra &middot; <a href="https://webbymaya.com">WebByMaya.com</a></p>'
+            f'</body></html>'
+        )
 
     return plain, html
 
@@ -211,43 +433,157 @@ Maya Sierra · Web Designer · <a href="https://webbymaya.com">WebByMaya.com</a>
 # SendGrid helper
 # ---------------------------------------------------------------------------
 
-def send_email(to: str, subject: str, plain: str, html: str) -> bool:
-    """Send a single email via SendGrid. Returns True on success."""
-    import urllib.request
-    import urllib.error
+def _gmail_access_token() -> str:
+    """Return a fresh Gmail OAuth access token, auto-refreshing if expired."""
+    import json as _json, datetime as _dt, urllib.request as _ur, urllib.parse as _up
+    from datetime import timezone
+    if not GMAIL_TOKEN_PATH.exists():
+        return ""
+    try:
+        tok = _json.loads(GMAIL_TOKEN_PATH.read_text())
+        access = tok.get("token", "")
+        exp = _dt.datetime.fromisoformat(tok["expiry"].replace("Z", "+00:00"))
+        if _dt.datetime.now(timezone.utc) >= exp - _dt.timedelta(seconds=60):
+            data = _up.urlencode({
+                "client_id":     tok["client_id"],
+                "client_secret": tok["client_secret"],
+                "refresh_token": tok["refresh_token"],
+                "grant_type":    "refresh_token",
+            }).encode()
+            resp = _json.loads(_ur.urlopen(_ur.Request(
+                "https://oauth2.googleapis.com/token", data=data), timeout=10).read())
+            access = resp["access_token"]
+            tok["token"] = access
+            tok["expiry"] = (_dt.datetime.now(timezone.utc) +
+                             _dt.timedelta(seconds=resp.get("expires_in", 3600))
+                             ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            GMAIL_TOKEN_PATH.write_text(_json.dumps(tok))
+        return access
+    except Exception:
+        return ""
 
-    if not SENDGRID_API_KEY:
-        print("  [ERROR] SENDGRID_API_KEY not set. Run: source ~/.zshrc")
+
+# Track which providers hit their daily limit so we skip them for the rest of the run
+_exhausted_providers: set = set()
+
+
+def _send_via_sendgrid(to: str, subject: str, plain: str, html: str) -> bool:
+    import urllib.request, urllib.error
+    if not SENDGRID_API_KEY or "sendgrid" in _exhausted_providers:
         return False
-
     payload = json.dumps({
         "personalizations": [{"to": [{"email": to}]}],
         "from": {"email": SENDER_EMAIL, "name": SENDER_NAME},
         "subject": subject,
-        "content": [
-            {"type": "text/plain", "value": plain},
-            {"type": "text/html",  "value": html},
-        ],
+        "content": [{"type": "text/plain", "value": plain}, {"type": "text/html", "value": html}],
     }).encode("utf-8")
-
     req = urllib.request.Request(
-        "https://api.sendgrid.com/v3/mail/send",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {SENDGRID_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+        "https://api.sendgrid.com/v3/mail/send", data=payload,
+        headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+        method="POST")
     try:
         urllib.request.urlopen(req)
         return True
     except urllib.error.HTTPError as e:
-        print(f"  [ERROR] SendGrid {e.code}: {e.read().decode()}")
+        body = e.read().decode()[:300]
+        if e.code in (429, 403) or "limit" in body.lower() or "quota" in body.lower():
+            print("  [SG] Daily limit reached — switching to Brevo.")
+            _exhausted_providers.add("sendgrid")
+        else:
+            print(f"  [SG ERROR] {e.code}: {body}")
         return False
     except Exception as exc:
-        print(f"  [ERROR] {exc}")
+        print(f"  [SG ERROR] {exc}")
         return False
+
+
+def _send_via_brevo(to: str, subject: str, plain: str, html: str) -> bool:
+    """Brevo REST API — 300 emails/day free."""
+    import urllib.request, urllib.error
+    if not BREVO_API_KEY or "brevo" in _exhausted_providers:
+        return False
+    payload = json.dumps({
+        "sender":      {"email": SENDER_EMAIL, "name": SENDER_NAME},
+        "to":          [{"email": to}],
+        "subject":     subject,
+        "textContent": plain,
+        "htmlContent": html,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email", data=payload,
+        headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
+        method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:300]
+        if e.code in (429, 402) or "limit" in body.lower() or "quota" in body.lower():
+            print("  [Brevo] Daily limit reached — switching to Gmail.")
+            _exhausted_providers.add("brevo")
+        else:
+            print(f"  [BREVO ERROR] {e.code}: {body}")
+        return False
+    except Exception as exc:
+        print(f"  [BREVO ERROR] {exc}")
+        return False
+
+
+def _send_via_gmail(to: str, subject: str, plain: str, html: str) -> bool:
+    import email.mime.multipart, email.mime.text, base64 as _b64
+    import urllib.request, urllib.error
+    if "gmail" in _exhausted_providers:
+        return False
+    access = _gmail_access_token()
+    if not access:
+        return False
+    try:
+        msg = email.mime.multipart.MIMEMultipart("alternative")
+        msg["To"] = to
+        msg["From"] = f"{SENDER_NAME} <{SENDER_EMAIL}>"
+        msg["Subject"] = subject
+        msg.attach(email.mime.text.MIMEText(plain, "plain"))
+        msg.attach(email.mime.text.MIMEText(html,  "html"))
+        raw = _b64.urlsafe_b64encode(msg.as_bytes()).decode()
+        payload = json.dumps({"raw": raw}).encode()
+        req = urllib.request.Request(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            data=payload,
+            headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json"},
+            method="POST")
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:300]
+        if e.code == 429 or "limit" in body.lower() or "quota" in body.lower():
+            print("  [Gmail] Daily limit reached.")
+            _exhausted_providers.add("gmail")
+        else:
+            print(f"  [GMAIL ERROR] {e.code}: {body}")
+        return False
+    except Exception as exc:
+        print(f"  [GMAIL ERROR] {exc}")
+        return False
+
+
+def send_email(to: str, subject: str, plain: str, html: str) -> tuple[bool, str]:
+    """
+    Smart tiered sending — auto-switches provider when daily limit hit:
+      1. SendGrid  (100/day free)
+      2. Brevo     (300/day free)
+      3. Gmail     (500/day free)
+    Returns (success, provider_used).
+    """
+    if "sendgrid" not in _exhausted_providers and SENDGRID_API_KEY:
+        if _send_via_sendgrid(to, subject, plain, html):
+            return True, "sendgrid"
+    if "brevo" not in _exhausted_providers and BREVO_API_KEY:
+        if _send_via_brevo(to, subject, plain, html):
+            return True, "brevo"
+    if "gmail" not in _exhausted_providers:
+        if _send_via_gmail(to, subject, plain, html):
+            return True, "gmail"
+    return False, ""
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +741,25 @@ def load_csv_prospects(path: str) -> list[dict]:
     return prospects
 
 
+def _load_csv_raw(path: str) -> tuple[list[dict], list[str]]:
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    return rows, fieldnames
+
+
+def _save_csv(path: str, rows: list[dict], fieldnames: list[str]) -> None:
+    if "email_status" not in fieldnames:
+        fieldnames.append("email_status")
+    for row in rows:
+        row.setdefault("email_status", "")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 # ---------------------------------------------------------------------------
 # Send log
 # ---------------------------------------------------------------------------
@@ -423,9 +778,11 @@ LOG_COLUMNS = [
 def write_log(log_rows: list[dict], output_dir: str = ".") -> str:
     today = datetime.date.today().strftime("%Y-%m-%d")
     path  = os.path.join(output_dir, f"send_log_{today}.csv")
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    new   = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:  # append — never overwrite
         writer = csv.DictWriter(f, fieldnames=LOG_COLUMNS)
-        writer.writeheader()
+        if new:
+            writer.writeheader()
         writer.writerows(log_rows)
     return path
 
@@ -459,9 +816,9 @@ def parse_args():
     )
     parser.add_argument(
         "--website-filter",
-        choices=["none", "bad"],
-        default=None,
-        help="none = only no-website businesses, bad = only dead/parked/soon/social sites",
+        choices=["none", "bad", "all"],
+        default="none",
+        help="none = only no-website businesses (default), bad = dead/parked sites only, all = everyone",
     )
     return parser.parse_args()
 
@@ -479,19 +836,25 @@ def main():
     else:
         print(f"Loading prospects from CSV: {args.input} ...")
         prospects = load_csv_prospects(args.input)
-        print(f"  Found {len(prospects)} prospect(s) in CSV.")
+        before = len(prospects)
+        prospects = [p for p in prospects
+                     if p.get("email_status", "").strip() not in ("sent", "bounced", "unsubscribed")
+                     and p.get("email", "").strip() and "@" in p.get("email", "")]
+        skipped_already = before - len(prospects)
+        print(f"  Found {len(prospects)} prospect(s) with email addresses ({skipped_already} skipped).")
 
     if not prospects:
         print("No prospects to process. Exiting.")
         return
 
-    # Apply --website-filter
+    # Apply --website-filter (default: "none" — only email businesses without a website)
     if args.website_filter == "none":
         prospects = [p for p in prospects if p.get("has_website", "").strip() == "No"]
         print(f"  After filter (no website): {len(prospects)} prospect(s).")
     elif args.website_filter == "bad":
         prospects = [p for p in prospects if p.get("has_website", "").strip().startswith("Yes -")]
         print(f"  After filter (bad/outdated site): {len(prospects)} prospect(s).")
+    # "all" skips filtering
 
     if not prospects:
         print("No prospects match the filter. Exiting.")
@@ -502,9 +865,9 @@ def main():
         print(f"Limiting to {args.limit} email(s) this run (--limit {args.limit}).")
     prospects = prospects[: args.limit]
 
-    # ---- Validate SendGrid key (skip in dry-run) -------------------------
-    if not args.dry_run and not SENDGRID_API_KEY:
-        sys.exit("ERROR: SENDGRID_API_KEY not set.\nRun: source ~/.zshrc")
+    # ---- Confirm at least one sending method is available ----------------
+    if not args.dry_run and not SENDGRID_API_KEY and not BREVO_API_KEY and not GMAIL_TOKEN_PATH.exists():
+        sys.exit("ERROR: No email provider configured. Need SENDGRID_API_KEY, BREVO_API_KEY, or Gmail token.")
 
     # ---- Send loop -------------------------------------------------------
     log_rows: list[dict] = []
@@ -521,8 +884,14 @@ def main():
             print(f"[{i+1}/{len(prospects)}] Skipping row with no business name.")
             continue
 
-        subject       = EMAIL_SUBJECT
-        plain, html   = build_email_body(name, category)
+        subject       = get_subject(name, category)
+        lead_city     = prospect.get("city", "Philadelphia, PA")
+        rating        = prospect.get("rating", "")
+        review_count  = prospect.get("review_count", "")
+        mockup_url    = _get_mockup_url(name, category, phone, lead_city, prospect.get("address", ""))
+        if mockup_url:
+            print(f"  Mockup  : {mockup_url}")
+        plain, html   = build_email_body(name, category, phone, lead_city, mockup_url, rating, review_count)
 
         recipient_email = prospect.get("email", "").strip()
 
@@ -549,26 +918,43 @@ def main():
             status = "skipped"
             note   = "No email address available"
             print(f"  Skipped — no email address on file.")
+        elif recipient_email.split("@")[-1].lower() in SKIP_DOMAINS:
+            status = "skipped"
+            note   = f"Platform email — {recipient_email.split('@')[-1]}"
+            print(f"  Skipped — platform/SaaS email: {recipient_email}")
+        elif recipient_email.lower() in ALREADY_SENT_EMAILS:
+            status = "skipped"
+            note   = "Already emailed in a previous run"
+            print(f"  Skipped — {recipient_email} was already contacted.")
         elif recipient_email.lower() in SUPPRESSED_EMAILS:
             status = "skipped"
             note   = "Suppressed — previously bounced or blocked"
             print(f"  Skipped — {recipient_email} is on bounce suppression list.")
         else:
-            success = send_email(recipient_email, subject, plain, html)
-            if success:
-                sent_count += 1
-                status = "sent"
-                note   = ""
-                print(f"  Sent to {recipient_email}.")
-
-                # Update Notion if the prospect came from there
-                if page_id:
-                    mark_notion_contacted(page_id, today_str)
-                    print(f"  Notion updated: Status → Contacted.")
+            # Free email validation: format + DNS + disposable domain check
+            valid, reason = validate_email(recipient_email)
+            if not valid:
+                status = "skipped"
+                note   = f"Disify: {reason}"
+                print(f"  Skipped — {reason}: {recipient_email}")
             else:
-                failed_count += 1
-                status = "failed"
-                note   = "Gmail API error — see console output"
+                success, provider = send_email(recipient_email, subject, plain, html)
+                if success:
+                    sent_count += 1
+                    status = "sent"
+                    note   = provider
+                    ALREADY_SENT_EMAILS.add(recipient_email.lower())
+                    print(f"  Sent via {provider} → {recipient_email}.")
+                    if page_id:
+                        mark_notion_contacted(page_id, today_str)
+                        print(f"  Notion updated: Status → Contacted.")
+                    if all(p in _exhausted_providers for p in ("sendgrid", "brevo", "gmail")):
+                        print("\n  All email providers exhausted for today. Stopping.")
+                        break
+                else:
+                    failed_count += 1
+                    status = "failed"
+                    note   = "Send failed — check console output"
 
         log_rows.append({
             "timestamp":      datetime.datetime.now().isoformat(timespec="seconds"),
@@ -580,15 +966,26 @@ def main():
             "notes":          note,
         })
 
-        # Throttle between sends (skip delay after the last one or in dry-run)
-        if not args.dry_run and recipient_email and i < len(prospects) - 1:
+        # Throttle only between actual sends, not skips/failures
+        if not args.dry_run and status == "sent" and i < len(prospects) - 1:
             print(f"  Waiting {SEND_DELAY_SECONDS}s before next send ...")
             time.sleep(SEND_DELAY_SECONDS)
 
     # ---- Write send log --------------------------------------------------
-    log_path = write_log(log_rows)
+    log_path = write_log(log_rows, output_dir=str(_SCRIPT_DIR))
     if not args.dry_run:
         log_email(log_rows)
+
+    # ---- Mark sent rows back in source CSV --------------------------------
+    if not args.dry_run and args.input.lower() != "notion":
+        sent_emails = {row["email_sent_to"].lower() for row in log_rows if row["status"] == "sent"}
+        if sent_emails:
+            all_rows, fieldnames = _load_csv_raw(args.input)
+            for row in all_rows:
+                if row.get("email", "").strip().lower() in sent_emails:
+                    row["email_status"] = "sent"
+            _save_csv(args.input, all_rows, fieldnames)
+            print(f"Source CSV updated: {len(sent_emails)} row(s) marked sent.")
 
     # ---- Summary ---------------------------------------------------------
     print("\n" + "=" * 50)
