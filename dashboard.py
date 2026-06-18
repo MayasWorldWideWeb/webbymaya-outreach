@@ -121,6 +121,7 @@ def all_email_logs():
                 "email_sent_to": r.get("email_sent_to",""),
                 "subject":      r.get("subject",""),
                 "status":       r.get("status",""),
+                "provider":     r.get("provider","sendgrid"),
                 "log_type":     "outreach",
             })
 
@@ -928,6 +929,53 @@ def build_dataset():
                       if row.get("status")=="sent" and row.get("email_sent_to")}
     gmail_replies  = fetch_gmail_replies(email_to_name)
 
+    # ── Provider breakdown (today) ──────────────────────────────────────────
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_sent = [r for r in send_logs if r.get("status")=="sent" and r.get("date","").startswith(today_str)]
+    seasonal_today = []
+    for p in sorted(SCRIPT_DIR.glob("seasonal_log_*.csv")):
+        try:
+            for row in load_csv(p):
+                if row.get("date","").startswith(today_str) and str(row.get("dry_run","1")) == "0":
+                    seasonal_today.append(row)
+        except Exception:
+            pass
+
+    provider_today = {
+        "sendgrid": sum(1 for r in today_sent if r.get("provider","sendgrid") in ("sendgrid","")),
+        "brevo":    sum(1 for r in today_sent if r.get("provider","") == "brevo"),
+        "gmail":    sum(1 for r in today_sent if r.get("provider","") == "gmail"),
+        "seasonal": len(seasonal_today),
+    }
+
+    # Read persisted exhaustion state
+    _limit_file = Path.home() / ".webbymaaya/provider_limits.json"
+    try:
+        _limit_data = json.loads(_limit_file.read_text())
+        provider_exhausted = {p: (d == today_str) for p, d in _limit_data.items()}
+    except Exception:
+        provider_exhausted = {}
+
+    # ── Instagram stats ──────────────────────────────────────────────────────
+    _ig_state_path = SCRIPT_DIR / ".instagram_state.json"
+    try:
+        _ig = json.loads(_ig_state_path.read_text())
+        ig_stats = {
+            "post_count":   _ig.get("post_count", 0),
+            "last_posted":  _ig.get("last_posted", ""),
+            "caption_index": _ig.get("caption_index", 0),
+        }
+    except Exception:
+        ig_stats = {"post_count": 0, "last_posted": "", "caption_index": 0}
+
+    # Next IG post day (Mon=0, Wed=2, Fri=4)
+    from datetime import date as _date
+    _today_dow = _date.today().weekday()
+    _post_days = [0, 2, 4]
+    _next_post_day = next((d for d in _post_days if d > _today_dow), _post_days[0])
+    _days_until = (_next_post_day - _today_dow) % 7 or 7
+    ig_stats["next_post_in_days"] = _days_until
+
     return {
         "intakes":      fetch_intake_responses(),
         "leads":        all_list,
@@ -962,6 +1010,9 @@ def build_dataset():
         "daily_sms":      daily_sms,
         "clicker_leads":  real_clickers,
         "clicker_data":   sg_clickers,
+        "provider_today":     provider_today,
+        "provider_exhausted": provider_exhausted,
+        "ig_stats":           ig_stats,
         "stats": {
             "total_sms":      total_sms,
             "total_email":    total_email,
@@ -1644,6 +1695,42 @@ function renderStats() {
     <div class="card"><div class="card-num green">${DATA.gmail_replies.length}</div><div class="card-label">Email Replies</div></div>
     <div class="card"><div class="card-num red">${s.opt_outs}</div><div class="card-label">SMS Opt-Outs</div></div>
     <div class="card"><div class="card-num red">${s.bounces}</div><div class="card-label">Email Bounces</div></div>
+
+    ${(() => {
+      const pt  = DATA.provider_today || {};
+      const ex  = DATA.provider_exhausted || {};
+      const ig  = DATA.ig_stats || {};
+      const providers = [
+        { key:'sendgrid', label:'SendGrid', limit:100,  color:'#2980b9' },
+        { key:'brevo',    label:'Brevo',    limit:300,  color:'#27ae60' },
+        { key:'gmail',    label:'Gmail',    limit:500,  color:'#e67e22' },
+      ];
+      const provHTML = providers.map(p => {
+        const used = pt[p.key] || 0;
+        const pct  = Math.min(100, Math.round(used / p.limit * 100));
+        const done = ex[p.key];
+        const barColor = done ? '#555' : p.color;
+        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+          <span style="width:58px;font-size:10px;color:#888">${p.label}</span>
+          <div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px;overflow:hidden">
+            <div style="width:${pct}%;background:${barColor};height:100%;border-radius:3px;transition:width .3s"></div>
+          </div>
+          <span style="font-size:10px;color:${done?'#555':'#aaa'};width:52px;text-align:right">${used}/${p.limit}${done?' ✓':''}</span>
+        </div>`;
+      }).join('');
+      const igLine = ig.post_count > 0
+        ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1a1a1a;font-size:10px;color:#888">
+            📸 Instagram · ${ig.post_count} post${ig.post_count!==1?'s':''} · last: ${ig.last_posted||'—'}
+            · next in ${ig.next_post_in_days}d
+          </div>`
+        : '';
+      return `<div class="card" style="grid-column:span 2;min-width:260px">
+        <div class="card-label" style="margin-bottom:8px">Email Providers — Today</div>
+        ${provHTML}
+        <div style="margin-top:6px;font-size:10px;color:#555">Resets at midnight · auto-fallback active</div>
+        ${igLine}
+      </div>`;
+    })()}
   `;
   document.getElementById('badge-warm').textContent      = s.warm;
   document.getElementById('badge-responses').textContent =
