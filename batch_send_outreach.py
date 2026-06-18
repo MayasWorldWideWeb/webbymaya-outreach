@@ -246,9 +246,88 @@ _SUBJECT_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Category normalization — correct mislabeled businesses using their name
+# ---------------------------------------------------------------------------
+
+_NAME_CATEGORY_RULES = [
+    # Food & drink — check these first (very common mismatches)
+    (["pizza", "pizzeria", "pie shop"],                                         "pizza"),
+    (["diner", "pancake", "waffle", "breakfast", "brunch"],                     "diner"),
+    (["bbq", "barbeque", "barbecue", "smokehouse", "smoke house"],              "restaurant"),
+    (["sushi", "ramen", "pho", "dim sum", "wok", "hibachi", "thai", "chinese",
+      "japanese", "korean", "vietnamese", "indian", "mexican", "italian",
+      "greek", "mediterranean", "caribbean", "ethiopian", "peruvian"],          "restaurant"),
+    (["restaurant", "ristorante", "bistro", "brasserie", "tavern", "grill",
+      "grille", "steakhouse", "steak house", "chophouse", "chop house",
+      "kitchen", "eatery", "house of", "public house"],                         "restaurant"),
+    (["cafe", "café", "coffee", "espresso", "roaster", "roastery",
+      "tea house", "boba", "bubble tea"],                                        "cafe"),
+    (["bakery", "bakehouse", "bread", "pastry", "patisserie", "boulangerie",
+      "cookie", "cupcake", "muffin", "bagel", "donut", "doughnut"],             "bakery"),
+    (["bar ", "bar&", "bar/", "lounge", "pub ", "pub,", "pub.", "tavern",
+      "brewery", "brewhouse", "brew pub", "wine bar", "cocktail"],              "bar"),
+    (["juice", "smoothie", "acai"],                                             "juice bar"),
+    (["ice cream", "gelato", "frozen yogurt", "fro-yo", "froyo", "creamery"],  "ice cream"),
+    (["food truck", "foodtruck", "catering"],                                   "food truck"),
+    # Beauty & wellness
+    (["nail", "nails", "nail spa", "manicure", "pedicure"],                    "nail salon"),
+    (["hair salon", "hair studio", "hair lounge", "hair bar",
+      "salon & spa", "salon and spa", "beauty salon"],                          "hair salon"),
+    (["barber", "barbershop", "barber shop", "cuts ", "fade", "kutz"],         "barbershop"),
+    (["lash", "eyelash", "brow", "eyebrow", "threading"],                      "lash studio"),
+    (["spa", "day spa", "medi spa", "medspa", "med spa"],                      "spa"),
+    (["massage", "bodywork", "body work", "therapeutic"],                       "massage"),
+    (["tattoo", "ink ", "inkhouse", "tattooing", "piercing", "body art"],      "tattoo parlor"),
+    (["yoga", "pilates", "barre", "cycle", "cycling", "spin"],                 "yoga studio"),
+    (["gym", "fitness", "crossfit", "crossfit", "muay thai", "jiu jitsu",
+      "boxing", "martial art", "karate", "kickboxing"],                         "gym"),
+    # Automotive
+    (["auto repair", "auto service", "auto care", "car repair", "mechanic",
+      "automotive", "motor", "garage", "transmission", "brakes",
+      "muffler", "exhaust", "engine"],                                          "auto repair"),
+    (["tire", "tires", "wheel", "wheels", "rim ", "rims"],                     "tire shop"),
+    (["car wash", "auto wash", "detailing", "detail shop"],                    "car wash"),
+    # Home services
+    (["cleaning", "cleaners", "janitorial", "maid", "housekeeping"],           "cleaning service"),
+    (["landscaping", "lawn", "grass", "garden", "tree service", "tree care",
+      "arborist", "irrigation"],                                                 "landscaping"),
+    (["plumber", "plumbing", "drain", "pipe", "sewer"],                        "plumber"),
+    (["electric", "electrician"],                                               "electrician"),
+    (["roofing", "roofer", "roof repair"],                                     "roofing"),
+    (["hvac", "heating", "cooling", "air condition", "furnace"],               "hvac"),
+    (["painter", "painting", "paint contractor"],                              "painter"),
+    (["moving", "movers", "mover", "relocation", "storage"],                  "moving company"),
+    # Pets
+    (["pet grooming", "dog grooming", "grooming"],                             "pet grooming"),
+    (["veterinar", "animal clinic", "animal hospital", "vet "],                "vet"),
+    (["dog walker", "pet sitter", "pet care", "doggy day"],                   "dog walker"),
+    # Retail / services
+    (["florist", "flower", "flowers", "floral"],                               "florist"),
+    (["photo", "photographer", "photography", "portrait", "headshot"],         "photographer"),
+    (["jewel", "jewelry", "jewellery", "ring repair", "watch repair"],         "jeweler"),
+    (["dry clean", "dryclean", "laundry", "alteration", "tailor"],             "dry cleaner"),
+    (["childcare", "child care", "daycare", "day care", "preschool",
+      "nursery", "after school"],                                               "daycare"),
+]
+
+
+def normalize_category(name: str, category: str) -> str:
+    """
+    Correct the category using the business name as ground truth.
+    Yelp sometimes returns a business under the wrong search bucket —
+    e.g., "Joe's Pizza" showing up in a nail salon search.
+    """
+    n = (name or "").lower()
+    for keywords, correct_cat in _NAME_CATEGORY_RULES:
+        if any(kw in n for kw in keywords):
+            return correct_cat
+    return category  # no match → keep original
+
+
 def get_subject(name: str, category: str) -> str:
     """Return a category-specific email subject, or the generic fallback."""
-    cat = (category or "").strip().lower()
+    cat = normalize_category(name, category).strip().lower()
     template = _SUBJECT_MAP.get(cat)
     if not template:
         for key, tpl in _SUBJECT_MAP.items():
@@ -463,8 +542,31 @@ def _gmail_access_token() -> str:
         return ""
 
 
-# Track which providers hit their daily limit so we skip them for the rest of the run
-_exhausted_providers: set = set()
+# ---------------------------------------------------------------------------
+# Provider daily-limit state — persists across runs (file-backed, resets at midnight)
+# ---------------------------------------------------------------------------
+_PROVIDER_LIMIT_FILE = Path.home() / ".webbymaaya/provider_limits.json"
+
+def _load_exhausted() -> set:
+    """Return providers that already hit their daily limit today."""
+    try:
+        data = json.loads(_PROVIDER_LIMIT_FILE.read_text())
+        today = str(datetime.date.today())
+        return {p for p, d in data.items() if d == today}
+    except Exception:
+        return set()
+
+def _mark_exhausted(provider: str) -> None:
+    """Persist a provider's daily exhaustion so future runs skip it."""
+    try:
+        data = json.loads(_PROVIDER_LIMIT_FILE.read_text()) if _PROVIDER_LIMIT_FILE.exists() else {}
+    except Exception:
+        data = {}
+    data[provider] = str(datetime.date.today())
+    _PROVIDER_LIMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PROVIDER_LIMIT_FILE.write_text(json.dumps(data))
+
+_exhausted_providers: set = _load_exhausted()
 
 
 def _send_via_sendgrid(to: str, subject: str, plain: str, html: str) -> bool:
@@ -486,9 +588,10 @@ def _send_via_sendgrid(to: str, subject: str, plain: str, html: str) -> bool:
         return True
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
-        if e.code in (429, 403) or "limit" in body.lower() or "quota" in body.lower():
+        if e.code in (401, 402, 429, 403) or "limit" in body.lower() or "quota" in body.lower() or "credits" in body.lower():
             print("  [SG] Daily limit reached — switching to Brevo.")
             _exhausted_providers.add("sendgrid")
+            _mark_exhausted("sendgrid")
         else:
             print(f"  [SG ERROR] {e.code}: {body}")
         return False
@@ -518,9 +621,10 @@ def _send_via_brevo(to: str, subject: str, plain: str, html: str) -> bool:
         return True
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
-        if e.code in (429, 402) or "limit" in body.lower() or "quota" in body.lower():
+        if e.code in (400, 402, 429) or "limit" in body.lower() or "quota" in body.lower() or "credit" in body.lower() or "dailySendingLimit" in body:
             print("  [Brevo] Daily limit reached — switching to Gmail.")
             _exhausted_providers.add("brevo")
+            _mark_exhausted("brevo")
         else:
             print(f"  [BREVO ERROR] {e.code}: {body}")
         return False
@@ -884,6 +988,7 @@ def main():
             print(f"[{i+1}/{len(prospects)}] Skipping row with no business name.")
             continue
 
+        category      = normalize_category(name, category)
         subject       = get_subject(name, category)
         lead_city     = prospect.get("city", "Philadelphia, PA")
         rating        = prospect.get("rating", "")

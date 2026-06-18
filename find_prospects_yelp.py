@@ -18,6 +18,18 @@ USAGE:
 """
 import argparse, csv, datetime, json, os, sys, time, urllib.request, urllib.parse
 from pathlib import Path
+import importlib.util as _ilu
+
+def _get_normalizer():
+    spec = _ilu.spec_from_file_location("bso", Path(__file__).parent / "batch_send_outreach.py")
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.normalize_category
+
+try:
+    _normalize_category = _get_normalizer()
+except Exception:
+    _normalize_category = lambda name, cat: cat
 
 SCRIPT_DIR = Path(__file__).parent
 API_KEY    = os.environ.get("YELP_API_KEY","")
@@ -313,12 +325,13 @@ def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=50):
                 seen_ids.add(biz_id)
                 continue
 
+            corrected_cat = _normalize_category(name, friendly_cat)
             prospects.append({
                 "name":          name,
                 "address":       address,
                 "phone":         phone,
                 "email":         "",
-                "category":      friendly_cat,
+                "category":      corrected_cat,
                 "city":          city_str,
                 "place_id":      biz_id,
                 "maps_url":      maps_url,
@@ -331,7 +344,8 @@ def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=50):
                 "sms_status":    "",
             })
             seen_ids.add(biz_id)
-            print(f"  ✓ {name} ({friendly_cat}) — no website")
+            label = corrected_cat if corrected_cat != friendly_cat else friendly_cat
+            print(f"  ✓ {name} ({label}) — no website")
 
         offset += len(businesses)
         if len(businesses) < batch:
