@@ -5,8 +5,10 @@ send_log_*.csv
 bounce_log.csv
 lead_status.csv
 followup_queue.csv
+backlog_unsent_emails.csv
 zone_state.json
 search_progress.json
+send_schedule.json
 search_output.log
 cron_run.log
 launchd.log
@@ -15,9 +17,31 @@ notify.log
 weekly.log
 *.log
 
+# Log CSVs
+clicker_followup_log_*.csv
+email_followup_log_*.csv
+followup_log_*.csv
+seasonal_log_*.csv
+
+# Runtime state / session files
+.auto_replied.json
+.ig_liker_state.json
+.instagram_state.json
+.seen_autoreplied.json
+.seen_gmail_replies.json
+.seen_replies.json
+clicker_cache.json
+
+# Generated / large binary content
+mockups/
+proposals/
+ig_queue/
+ig_post_image.jpg
+craigslist_debug.png
+fb_posts_*.txt
+
 # Secrets / tokens
 .env
-.seen_replies.json
 migrate_to_supabase.py
 
 # Python

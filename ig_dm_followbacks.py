@@ -13,15 +13,18 @@ STATE_FILE    = SCRIPT_DIR / ".ig_dm_state.json"
 COOKIE_FILE   = Path.home() / ".webbymaaya/ig_cookie.txt"
 SESSION_FILE  = Path.home() / ".webbymaaya/ig_session.json"
 
-DAILY_LIMIT = 12
+DAILY_LIMIT = 20
 MY_USER_ID  = "21435992045"   # @webbymaya
 
-# Rotate through 4 messages so it doesn't look like a bot
+# Rotate through 7 messages (one dominant angle per day of week)
 DM_TEMPLATES = [
-    "Hey {name}! Thanks for the follow 🙌 I'm Maya — I build websites for Philly small businesses starting at $799. If you ever need a site or want to upgrade your current one, I'd love to help. Check us out at webbymaya.com!",
-    "Hi {name}! Appreciate the follow! I'm Maya with WebByMaya — websites for local Philly businesses, flat $799, live in 7 days. If you're ever looking to get online or level up your site, feel free to reach out 😊",
-    "Hey {name}, thanks for following! I help Philly business owners get online fast — professional sites starting at $799. If that's ever something you need, I'm here! webbymaya.com 🏙️",
-    "Hi {name}! Thanks for the follow 👋 I'm Maya, a web designer based in Philly. I build sites for local businesses like yours — starting at $799, done in a week. Would love to work together someday! webbymaya.com",
+    "Hey {name}! Thanks for the follow 🙌 I'm Maya — I build websites for Philly small businesses, starting at $499, live in 7 days. See what I can do for your business → webbymaya.com",
+    "Hi {name}! Appreciate the follow! I help local business owners get found on Google fast. Professional sites starting at $799, no monthly fees. Check it out: webbymaya.com",
+    "Hey {name} 👋 I'm Maya with WebByMaya. I build clean, fast websites for local businesses — $799, done in a week. If you're ever looking to get online, I've got you: webbymaya.com",
+    "Hi {name}! Thanks for following! Quick question — do you have a website for your business? I help Philly business owners get found online starting at $799. See examples at webbymaya.com",
+    "Hey {name}! Thanks for the follow 🙏 I'm Maya — web designer based in Philly. I build sites for local businesses so their customers can actually find them on Google. webbymaya.com — take a look!",
+    "Hi {name}! I noticed you followed — I'm Maya, I build websites for small businesses in the Philly area. $799, live in 7 days, no tech headaches. Would love to help: webbymaya.com",
+    "Hey {name}! Thanks for following WebByMaya 🏙️ I help local business owners show up online — professional sites starting at $499. If that's something you need, hit me up or check webbymaya.com",
 ]
 
 def load_state():
@@ -103,7 +106,8 @@ def main():
             if not name or len(name) < 2:
                 name = "there"
 
-            msg = random.choice(DM_TEMPLATES).format(name=name)
+            dow = date.today().weekday()
+            msg = DM_TEMPLATES[dow % len(DM_TEMPLATES)].format(name=name)
             cl.direct_send(msg, user_ids=[int(uid)])
 
             dm_sent.add(uid)

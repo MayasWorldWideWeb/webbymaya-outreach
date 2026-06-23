@@ -22,6 +22,7 @@ import argparse, base64, csv, datetime, json, os, re, sys, urllib.request, urlli
 from pathlib import Path
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from batch_send_outreach import html_card, _ep, _ecta
 
 SCRIPT_DIR    = Path(__file__).parent
 STATE_FILE    = SCRIPT_DIR / ".auto_replied.json"
@@ -290,6 +291,40 @@ box-shadow:0 2px 12px rgba(0,0,0,.08)">
   </div>
 </div>
 </body></html>"""
+
+def _build_intake_email(biz: str, intake_url: str, to_email: str = "") -> tuple:
+    """Returns (subject, plain, html) for the post-YES intake form email."""
+    subject = f"Re: {biz} — your personalized form is ready"
+    plain = f"""\
+Hey,
+
+Thanks for replying — I'm excited to work with you!
+
+I put together a quick form just for {biz}. It:
+  • Shows you the website preview I built
+  • Lets you tell me what you'd like to change
+  • Shows add-on options with live pricing so you can see your exact total before committing
+
+Go here to fill it out (takes about 5 minutes):
+
+  {intake_url}
+
+Once you submit it I'll follow up within 24 hours to confirm the details and collect the $200 deposit to get started.
+
+Talk soon,
+Maya Sierra
+WebByMaya · maya@webbymaya.com · webbymaya.com
+"""
+    html = html_card(
+        _ep(f"Thanks for replying — I'm excited to work with you on <strong>{biz}</strong>!")
+        + _ep("I set up a personalized form just for you. It shows the preview I built, lets you tell me what to change, and shows your exact total based on what add-ons you pick.")
+        + _ecta(intake_url, "Open Your Personalized Form &rarr;")
+        + _ep("Takes about 5 minutes &nbsp;&middot;&nbsp; See your price before you commit", muted=True, small=True)
+        + _ep(f"Once you submit, I'll follow up within 24 hours to confirm everything and collect your <strong>$200 deposit</strong> to get started."),
+        email=to_email,
+    )
+    return subject, plain, html
+
 
 OPTOUT_PLAIN = "Got it — you've been removed from our list. You won't hear from us again. Sorry for the disruption!\n\nMaya Sierra · WebByMaya"
 
@@ -563,17 +598,30 @@ def process_gmail_replies(dry_run: bool = False) -> int:
 
         elif intent == "interest":
             print(f"  [hot lead] {biz} <{from_email}>")
-            proposal_path = None
+            # Generate personalized intake form for this business
+            intake_url = ""
             try:
-                from generate_proposal import make_proposal
-                proposal_path = make_proposal(biz)
-                print(f"    Proposal: {proposal_path.name}")
+                from generate_intake_form import upload_intake_form
+                # Look up category from send logs
+                cat = ""
+                for p in sorted(SCRIPT_DIR.glob("send_log_*.csv")):
+                    with open(p, newline="", encoding="utf-8") as f:
+                        for row in csv.DictReader(f):
+                            if row.get("email_sent_to","").lower() == from_email:
+                                cat = row.get("category","")
+                                break
+                    if cat: break
+                intake_url = upload_intake_form(biz, cat)
+                print(f"    Intake form: {intake_url}")
             except Exception as pe:
-                print(f"    [proposal warn] {pe} — sending without PDF")
-            ok = _send_email(from_email, PRICING_SUBJECT, PRICING_PLAIN, PRICING_HTML,
-                             dry_run, attachment_path=proposal_path)
-            if ok:
-                print(f"    → pricing email + proposal PDF sent")
+                print(f"    [intake form warn] {pe} — sending generic pricing email")
+            if intake_url:
+                subj, plain, html = _build_intake_email(biz, intake_url, to_email=from_email)
+                ok = _send_email(from_email, subj, plain, html, dry_run)
+                if ok: print(f"    → personalized intake form link sent")
+            else:
+                ok = _send_email(from_email, PRICING_SUBJECT, PRICING_PLAIN, PRICING_HTML, dry_run)
+                if ok: print(f"    → fallback pricing email sent")
             replied[uid] = {"intent": "interest", "email": from_email}
             processed += 1
 

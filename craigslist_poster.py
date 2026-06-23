@@ -44,7 +44,7 @@ If not, you're losing customers to competitors who do.
 
 I'm Maya, a web designer based in Philadelphia. I build clean, fast, mobile-ready websites for local businesses — salons, restaurants, auto shops, photographers, and more.
 
-✅ Starting at $799 flat
+✅ Starting at $499
 ✅ Live in 7 days
 ✅ Mobile-friendly
 ✅ Google-ready (basic SEO included)

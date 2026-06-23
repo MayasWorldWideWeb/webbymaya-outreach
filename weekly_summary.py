@@ -112,32 +112,48 @@ PIPELINE
 Run wm-replies to check for responses.
 """
 
-    html = f"""<html><body style="font-family:Arial,sans-serif;color:#333;max-width:560px;margin:auto;padding:20px">
-<h2 style="margin-bottom:4px">WebByMaya Weekly Report</h2>
-<p style="color:#888;margin-top:0">Week ending {today.strftime('%B %d, %Y')}</p>
+    def _row(label, val, shade=False):
+        bg = "background:#faf9f7;" if shade else ""
+        return (f'<tr style="{bg}"><td style="padding:7px 14px;color:#888888;font-family:Arial,sans-serif;font-size:13px;">{label}</td>'
+                f'<td style="padding:7px 14px;font-family:Arial,sans-serif;font-size:13px;font-weight:700;color:#1c1c1c;">{val}</td></tr>')
+    def _section(label):
+        return (f'<tr><td colspan="2" style="padding:12px 14px 6px;font-size:11px;font-weight:700;letter-spacing:2px;'
+                f'text-transform:uppercase;color:#C9A96E;font-family:Arial,sans-serif;border-top:1px solid #eeeeee;">{label}</td></tr>')
 
-<table style="width:100%;border-collapse:collapse;margin:16px 0">
-  <tr style="background:#f5f5f5"><td colspan="2" style="padding:8px 12px;font-weight:bold">THIS WEEK</td></tr>
-  <tr><td style="padding:6px 12px;color:#666">Emails sent</td><td style="padding:6px 12px"><b>{emails_wk}</b></td></tr>
-  <tr style="background:#f9f9f9"><td style="padding:6px 12px;color:#666">SMS sent</td><td style="padding:6px 12px"><b>{sms_wk}</b></td></tr>
-  <tr><td style="padding:6px 12px;color:#666">Follow-ups sent</td><td style="padding:6px 12px"><b>{fu_wk}</b></td></tr>
-
-  <tr style="background:#f5f5f5"><td colspan="2" style="padding:8px 12px;font-weight:bold;padding-top:16px">ALL TIME</td></tr>
-  <tr><td style="padding:6px 12px;color:#666">Total emails</td><td style="padding:6px 12px"><b>{emails_all}</b></td></tr>
-  <tr style="background:#f9f9f9"><td style="padding:6px 12px;color:#666">Total SMS</td><td style="padding:6px 12px"><b>{sms_all}</b></td></tr>
-  <tr><td style="padding:6px 12px;color:#666">Total follow-ups</td><td style="padding:6px 12px"><b>{fu_all}</b></td></tr>
-  <tr style="background:#f9f9f9"><td style="padding:6px 12px;color:#666">Bounce rate</td><td style="padding:6px 12px"><b>{bounce_rate:.1f}%</b></td></tr>
-
-  <tr style="background:#f5f5f5"><td colspan="2" style="padding:8px 12px;font-weight:bold;padding-top:16px">PIPELINE</td></tr>
-  <tr><td style="padding:6px 12px;color:#666">Zones completed</td><td style="padding:6px 12px"><b>{zones_done} / {zones_total}</b></td></tr>
-  <tr style="background:#f9f9f9"><td style="padding:6px 12px;color:#666">Zones remaining</td><td style="padding:6px 12px"><b>{zones_left}</b></td></tr>
-  <tr><td style="padding:6px 12px;color:#666">Next zone</td><td style="padding:6px 12px"><b>{next_zone}</b></td></tr>
-</table>
-
-<p style="margin-top:20px">
-  <a href="https://webbymaya.com" style="color:#000;font-weight:bold">WebByMaya.com</a>
-</p>
-</body></html>"""
+    html = (
+        '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+        '<body style="margin:0;padding:0;background:#f0ede8;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0ede8;">'
+        '<tr><td align="center" style="padding:28px 12px;">'
+        '<table role="presentation" width="560" cellpadding="0" cellspacing="0"'
+        ' style="max-width:560px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e4dfd8;">'
+        '<tr><td style="background:#C9A96E;height:3px;font-size:0;line-height:3px;">&nbsp;</td></tr>'
+        '<tr><td style="padding:22px 28px 16px;">'
+        f'<p style="margin:0 0 4px;font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#C9A96E;font-family:Arial,sans-serif;">WebByMaya</p>'
+        f'<p style="margin:0;font-size:18px;font-weight:700;color:#1a1a1a;font-family:Arial,sans-serif;">Weekly Report</p>'
+        f'<p style="margin:4px 0 0;font-size:12px;color:#aaa;font-family:Arial,sans-serif;">Week ending {today.strftime("%B %d, %Y")}</p>'
+        '</td></tr>'
+        '<tr><td style="padding:0 14px 24px;">'
+        '<table width="100%" cellpadding="0" cellspacing="0">'
+        + _section("This Week")
+        + _row("Emails sent", emails_wk)
+        + _row("SMS sent", sms_wk, shade=True)
+        + _row("Follow-ups sent", fu_wk)
+        + _section("All Time")
+        + _row("Total emails", emails_all)
+        + _row("Total SMS", sms_all, shade=True)
+        + _row("Total follow-ups", fu_all)
+        + _row("Bounce rate", f"{bounce_rate:.1f}%", shade=True)
+        + _section("Pipeline")
+        + _row("Zones completed", f"{zones_done} / {zones_total}")
+        + _row("Zones remaining", zones_left, shade=True)
+        + _row("Next zone", next_zone)
+        + '</table>'
+        '</td></tr>'
+        '</table>'
+        '</td></tr></table>'
+        '</body></html>'
+    )
 
     send_email(subject, plain, html)
 

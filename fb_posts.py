@@ -78,7 +78,7 @@ does your name come up?
 If you don't have a website, the answer is no. And that means someone else is \
 getting that customer instead of you.
 
-I build websites specifically for local Philly businesses. $799 flat, no monthly fees, \
+I build websites specifically for local Philly businesses. starting at $499, no monthly fees, \
 live in about a week.
 
 I also do a free mockup first — you see the whole site before paying anything.

@@ -57,6 +57,7 @@ OUTPUT
 
 import argparse
 import csv
+import re as _re
 from sb import log_email
 import datetime
 import json
@@ -88,6 +89,12 @@ SENDER_NAME  = "Maya Sierra"
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
 BREVO_API_KEY    = os.environ.get("BREVO_API_KEY", "")
+BREVO_API_KEY_2       = os.environ.get("BREVO_API_KEY_2", "")        # 2nd free Brevo account — +300/day
+SENDPULSE_API_KEY     = os.environ.get("SENDPULSE_API_KEY", "")      # SendPulse — +500/day free forever
+SENDPULSE_CLIENT_ID   = os.environ.get("SENDPULSE_CLIENT_ID", "")    # legacy OAuth fallback
+SENDPULSE_CLIENT_SEC  = os.environ.get("SENDPULSE_CLIENT_SECRET", "")
+MAILGUN_API_KEY       = os.environ.get("MAILGUN_API_KEY", "")         # Mailgun trial — +5,000 first 3 months
+MAILGUN_DOMAIN        = os.environ.get("MAILGUN_DOMAIN", "webbymaya.com")
 GMAIL_TOKEN_PATH = Path.home() / ".webbymaaya/gmail_token.json"
 
 # Notion API base
@@ -185,8 +192,8 @@ SKIP_DOMAINS = {
     "zendesk.com", "hubspot.com", "mailchimp.com", "constantcontact.com",
 }
 
-# Default maximum emails per run — uses all three free providers (SG 100 + Brevo 300 + Gmail 500)
-DEFAULT_LIMIT = 900
+# Default maximum emails per run — SG 100 + Brevo 300 + Brevo2 300 + Mailgun 500 + Gmail 500
+DEFAULT_LIMIT = 1700
 
 # ---------------------------------------------------------------------------
 # Email template
@@ -250,93 +257,284 @@ _SUBJECT_MAP = {
 # Category normalization — correct mislabeled businesses using their name
 # ---------------------------------------------------------------------------
 
+def _kw_match(kw: str, text: str) -> bool:
+    """Word-boundary aware keyword check — 'pho' won't match 'photography'."""
+    return bool(_re.search(r'\b' + _re.escape(kw.strip()) + r'\b', text))
+
+# Rules are checked IN ORDER — first match wins.
+# CRITICAL: most-specific terms must come BEFORE broad ones.
+# "barber" must beat "salon", "nail" must beat "spa", etc.
 _NAME_CATEGORY_RULES = [
-    # Food & drink — check these first (very common mismatches)
-    (["pizza", "pizzeria", "pie shop"],                                         "pizza"),
-    (["diner", "pancake", "waffle", "breakfast", "brunch"],                     "diner"),
-    (["bbq", "barbeque", "barbecue", "smokehouse", "smoke house"],              "restaurant"),
-    (["sushi", "ramen", "pho", "dim sum", "wok", "hibachi", "thai", "chinese",
-      "japanese", "korean", "vietnamese", "indian", "mexican", "italian",
-      "greek", "mediterranean", "caribbean", "ethiopian", "peruvian"],          "restaurant"),
-    (["restaurant", "ristorante", "bistro", "brasserie", "tavern", "grill",
-      "grille", "steakhouse", "steak house", "chophouse", "chop house",
-      "kitchen", "eatery", "house of", "public house"],                         "restaurant"),
+    # ── AUTOMOTIVE (check before "motor"/"garage" bleed into other cats) ──────
+    (["auto repair", "auto service", "auto care", "auto fix", "auto tech",
+      "car repair", "car care", "car service", "car tech",
+      "mechanic", "automotive", "auto body", "body shop",
+      "transmission", "brakes", "muffler", "exhaust", "engine repair",
+      "oil change", "lube"],                                                   "auto repair"),
+    (["auto tag", "auto tags", "vehicle tag", "notary auto",
+      "tag and title", "tags & title"],                                        "auto tags"),  # skip these — not web clients
+    (["tire", "tires", "wheel alignment", "rim ", "rims"],                    "tire shop"),
+    (["car wash", "auto wash", "auto detail", "car detail", "detailing"],     "car wash"),
+    (["towing", "tow truck", "roadside"],                                      "towing"),
+
+    # ── BARBERSHOP (before hair salon / beauty salon) ─────────────────────────
+    (["barber", "barbershop", "barber shop", "barbers", "barbering",
+      "barber lounge", "barber studio", "barber co",
+      "kutz", "cutz", "kuts", "cuts by", "fade lounge",
+      "gentlemen's cut", "gentleman's grooming"],                              "barbershop"),
+
+    # ── NAIL SALON (before spa / beauty salon) ───────────────────────────────
+    (["nail", "nails", "manicure", "pedicure", "gel nails",
+      "acrylic", "nail art", "nail bar", "nail lounge",
+      "nail studio", "nail spa"],                                              "nail salon"),
+
+    # ── HAIR SALON (after barber, after nail) ────────────────────────────────
+    # "beauty salon" is here — safe because barber check runs first
+    (["hair salon", "hair studio", "hair lounge", "hair bar", "hair co",
+      "hair boutique", "hair design", "hair care", "hair gallery",
+      "hair works", "coiffure", "coiffeur",
+      "blowout", "blow dry", "blowdry",
+      "hair color", "highlights", "balayage", "keratin",
+      "beauty salon", "beauty studio", "beauty parlor"],                      "hair salon"),
+
+    # ── LASH / BROW (before generic "spa") ───────────────────────────────────
+    (["lash", "eyelash", "lashes", "brow bar", "brow studio",
+      "eyebrow", "threading", "microblading", "brow lamination"],             "lash studio"),
+
+    # ── MASSAGE (before generic "spa") ───────────────────────────────────────
+    (["massage", "bodywork", "body work", "therapeutic massage",
+      "deep tissue", "swedish massage", "hot stone", "reflexology"],          "massage"),
+
+    # ── SPA (after nail/barber/lash/massage — spa is a catch-all) ────────────
+    (["day spa", "medi spa", "med spa", "medspa", "medical spa",
+      "wellness spa", "luxury spa", "full service spa"],                      "spa"),
+
+    # ── FOOD & DRINK ─────────────────────────────────────────────────────────
+    # Bakery FIRST — "Italian Bakery" should be bakery, not restaurant
+    (["bakery", "bakehouse", "bake shop", "patisserie", "boulangerie",
+      "croissant", "donut", "doughnut", "bagel", "cupcake"],                 "bakery"),
+    (["pizza", "pizzeria", "pie shop", "pizza co", "pizza kitchen"],          "pizza"),
+    (["bbq", "barbeque", "barbecue", "smokehouse", "smoke house",
+      "pit master", "pitmaster", "soul food", "southern food",
+      "wings", "wing spot", "wing house", "burger", "burgers",
+      "hoagie", "cheesesteak", "cheesesteaks", "sub shop",
+      "deli", "seafood", "fish fry", "fish & chips",
+      "taco", "tacos", "burrito", "quesadilla"],                              "restaurant"),
+    # Note: word-boundary matching handles "pho" vs "photography" etc.
+    (["sushi", "ramen", "pho", "dim sum", "wok", "hibachi",
+      "thai", "chinese", "japanese", "korean", "vietnamese",
+      "indian", "mexican", "italian", "greek", "mediterranean",
+      "caribbean", "ethiopian", "peruvian"],                                  "restaurant"),
+    (["restaurant", "ristorante", "bistro", "brasserie",
+      "grille", "steakhouse", "steak house", "chophouse",
+      "chop house", "eatery", "cantina", "trattoria", "taverna",
+      "public house", "gastropub"],                                            "restaurant"),
+    (["grill", "grill & bar", "bar & grill", "bar and grill"],                "restaurant"),
     (["cafe", "café", "coffee", "espresso", "roaster", "roastery",
-      "tea house", "boba", "bubble tea"],                                        "cafe"),
-    (["bakery", "bakehouse", "bread", "pastry", "patisserie", "boulangerie",
-      "cookie", "cupcake", "muffin", "bagel", "donut", "doughnut"],             "bakery"),
-    (["bar ", "bar&", "bar/", "lounge", "pub ", "pub,", "pub.", "tavern",
-      "brewery", "brewhouse", "brew pub", "wine bar", "cocktail"],              "bar"),
-    (["juice", "smoothie", "acai"],                                             "juice bar"),
-    (["ice cream", "gelato", "frozen yogurt", "fro-yo", "froyo", "creamery"],  "ice cream"),
-    (["food truck", "foodtruck", "catering"],                                   "food truck"),
-    # Beauty & wellness
-    (["nail", "nails", "nail spa", "manicure", "pedicure"],                    "nail salon"),
-    (["hair salon", "hair studio", "hair lounge", "hair bar",
-      "salon & spa", "salon and spa", "beauty salon"],                          "hair salon"),
-    (["barber", "barbershop", "barber shop", "cuts ", "fade", "kutz"],         "barbershop"),
-    (["lash", "eyelash", "brow", "eyebrow", "threading"],                      "lash studio"),
-    (["spa", "day spa", "medi spa", "medspa", "med spa"],                      "spa"),
-    (["massage", "bodywork", "body work", "therapeutic"],                       "massage"),
-    (["tattoo", "ink ", "inkhouse", "tattooing", "piercing", "body art"],      "tattoo parlor"),
-    (["yoga", "pilates", "barre", "cycle", "cycling", "spin"],                 "yoga studio"),
-    (["gym", "fitness", "crossfit", "crossfit", "muay thai", "jiu jitsu",
-      "boxing", "martial art", "karate", "kickboxing"],                         "gym"),
-    # Automotive
-    (["auto repair", "auto service", "auto care", "car repair", "mechanic",
-      "automotive", "motor", "garage", "transmission", "brakes",
-      "muffler", "exhaust", "engine"],                                          "auto repair"),
-    (["tire", "tires", "wheel", "wheels", "rim ", "rims"],                     "tire shop"),
-    (["car wash", "auto wash", "detailing", "detail shop"],                    "car wash"),
-    # Home services
-    (["cleaning", "cleaners", "janitorial", "maid", "housekeeping"],           "cleaning service"),
-    (["landscaping", "lawn", "grass", "garden", "tree service", "tree care",
-      "arborist", "irrigation"],                                                 "landscaping"),
-    (["plumber", "plumbing", "drain", "pipe", "sewer"],                        "plumber"),
-    (["electric", "electrician"],                                               "electrician"),
-    (["roofing", "roofer", "roof repair"],                                     "roofing"),
-    (["hvac", "heating", "cooling", "air condition", "furnace"],               "hvac"),
-    (["painter", "painting", "paint contractor"],                              "painter"),
-    (["moving", "movers", "mover", "relocation", "storage"],                  "moving company"),
-    # Pets
-    (["pet grooming", "dog grooming", "grooming"],                             "pet grooming"),
-    (["veterinar", "animal clinic", "animal hospital", "vet "],                "vet"),
-    (["dog walker", "pet sitter", "pet care", "doggy day"],                   "dog walker"),
-    # Retail / services
-    (["florist", "flower", "flowers", "floral"],                               "florist"),
-    (["photo", "photographer", "photography", "portrait", "headshot"],         "photographer"),
-    (["jewel", "jewelry", "jewellery", "ring repair", "watch repair"],         "jeweler"),
-    (["dry clean", "dryclean", "laundry", "alteration", "tailor"],             "dry cleaner"),
+      "coffee house", "coffee shop", "coffeehouse",
+      "tea house", "boba", "bubble tea", "matcha"],                           "cafe"),
+    # Remaining bakery words (lower priority than "Italian Bakery" → already caught above)
+    (["bread", "pastry", "cookie", "muffin"],                                 "bakery"),
+    (["diner", "pancake", "waffle", "breakfast spot", "brunch"],              "diner"),
+    (["juice", "smoothie", "acai", "cold press"],                             "juice bar"),
+    (["ice cream", "gelato", "frozen yogurt", "fro-yo", "froyo", "creamery",
+      "sorbet", "soft serve"],                                                 "ice cream"),
+    (["food truck", "foodtruck"],                                              "food truck"),
+    (["catering", "caterer"],                                                  "catering"),
+    (["bar ", "bar&", "bar/", "sports bar", "dive bar",
+      "brewery", "brewhouse", "brew pub", "taproom",
+      "wine bar", "cocktail lounge", "nightclub"],                            "bar"),
+
+    # ── WELLNESS / FITNESS ───────────────────────────────────────────────────
+    # Use "ink" as a whole word (word-boundary matching prevents "pink" false match)
+    (["tattoo", "tatto", "ink", "inkhouse", "tattooing",
+      "body piercing", "piercing studio", "body art"],                        "tattoo parlor"),
+    (["yoga", "pilates", "barre"],                                            "yoga studio"),
+    (["crossfit", "muay thai", "jiu jitsu", "jiu-jitsu", "bjj",
+      "boxing gym", "martial art", "karate", "kickboxing", "mma "],           "gym"),
+    (["gym", "fitness center", "fitness club", "health club",
+      "athletic club", "personal training", "personal trainer",
+      "cycle studio", "spin studio", "boot camp"],                            "gym"),
+
+    # ── HOME SERVICES ────────────────────────────────────────────────────────
+    (["cleaning service", "cleaning co", "cleaning company",
+      "cleaning solutions", "cleaning pros",
+      "maid service", "house cleaning", "home cleaning",
+      "janitorial", "housekeeping"],                                           "cleaning service"),
+    (["landscaping", "lawn care", "lawn service", "grass cutting",
+      "garden", "tree service", "tree care", "arborist", "irrigation"],      "landscaping"),
+    (["plumber", "plumbing", "drain cleaning", "pipe repair", "sewer"],       "plumber"),
+    (["electric", "electrician", "electrical contractor",
+      "electrical service"],                                                   "electrician"),
+    (["roofing", "roofer", "roof repair", "roof replacement"],                "roofing"),
+    (["hvac", "heating", "cooling", "air conditioning", "air condition",
+      "furnace", "heat pump"],                                                 "hvac"),
+    (["painter", "painting", "paint co", "interior painting",
+      "exterior painting"],                                                    "painter"),
+    (["moving company", "movers", "moving service", "relocation",
+      "moving & storage", "moving and storage"],                               "moving company"),
+    (["handyman", "home repair", "home improvement", "remodeling",
+      "renovation", "contracting"],                                            "handyman"),
+
+    # ── PETS ─────────────────────────────────────────────────────────────────
+    (["pet grooming", "dog grooming", "dog spa", "dog salon",
+      "puppy grooming", "cat grooming", "grooming salon"],                    "pet grooming"),
+    (["veterinar", "animal clinic", "animal hospital", "animal care",
+      "vet clinic", "pet clinic"],                                             "vet"),
+    (["dog walker", "dog walking", "pet sitter", "pet sitting",
+      "pet care", "doggy day", "dog boarding"],                               "dog walker"),
+    (["pet store", "pet shop", "pet supply", "pet supplies"],                 "pet store"),
+
+    # ── RETAIL / PROFESSIONAL SERVICES ───────────────────────────────────────
+    (["florist", "flower shop", "flowers", "floral design",
+      "floral studio", "flower studio"],                                       "florist"),
+    (["photographer", "photography", "photo studio",
+      "portrait studio", "headshot"],                                          "photographer"),
+    (["videograph", "video production", "film production"],                   "videographer"),
+    (["jewel", "jewelry", "jewellery", "ring repair", "watch repair",
+      "custom jewelry"],                                                       "jeweler"),
+    (["dry clean", "dryclean", "dry cleaning"],                               "dry cleaner"),
+    (["laundry", "laundromat", "wash & fold", "wash and fold"],               "laundromat"),
+    (["alteration", "tailor", "tailoring", "seamstress"],                     "tailor"),
     (["childcare", "child care", "daycare", "day care", "preschool",
-      "nursery", "after school"],                                               "daycare"),
+      "nursery school", "after school"],                                       "daycare"),
+    (["print", "printing", "signs", "signage", "banner"],                    "print shop"),
+    (["pharmacy", "drug store", "drugstore"],                                  "pharmacy"),
 ]
+
+# Categories we should SKIP entirely — not good website prospects
+_SKIP_CATEGORIES = {
+    "auto tags", "towing", "bar", "nightclub", "pharmacy",
+    "laundromat", "print shop",
+}
+
+# Canonical aliases — unify fragmented categories in old data
+_CATEGORY_ALIASES = {
+    "mechanic":          "auto repair",
+    "barber shop":       "barbershop",
+    "beauty salon":      None,   # None = re-run name normalization
+    "fitness":           "gym",
+    "personal trainer":  "gym",
+    "dog walker":        "pet grooming",
+    "lawn care":         "landscaping",
+    "diner":             "restaurant",
+    "juice bar":         "cafe",
+}
 
 
 def normalize_category(name: str, category: str) -> str:
     """
-    Correct the category using the business name as ground truth.
-    Yelp sometimes returns a business under the wrong search bucket —
-    e.g., "Joe's Pizza" showing up in a nail salon search.
+    Return the correct category using the business name as primary signal.
+    Uses word-boundary matching so 'pho' never matches 'photography',
+    'lash' never matches 'flash', 'ink' never matches 'pink', etc.
     """
-    n = (name or "").lower()
+    n = (name or "").lower().strip()
     for keywords, correct_cat in _NAME_CATEGORY_RULES:
-        if any(kw in n for kw in keywords):
+        if any(_kw_match(kw, n) for kw in keywords):
             return correct_cat
-    return category  # no match → keep original
+    # No name signal — canonicalize Yelp's category
+    cat = (category or "").lower().strip()
+    if cat in _CATEGORY_ALIASES:
+        alias = _CATEGORY_ALIASES[cat]
+        return alias if alias else category
+    return category
 
+
+# 7 subject-line angles — one per day of week (Mon=0 … Sun=6)
+# Each is a format string taking {name}
+_SUBJECT_ANGLES = [
+    "I built {name} a website — free preview inside",          # Mon
+    "Your {name} customers can't find you — I made a site",    # Tue
+    "{name} doesn't show up online — I fixed that for free",   # Wed
+    "Free website preview for {name}",                         # Thu
+    "I put together a site for {name} — take a look",          # Fri
+    "{name} is missing from Google — I built something",       # Sat
+    "Quick question about {name}'s online presence",           # Sun
+]
+
+# Category overrides that still rotate on the second token of each angle
+_SUBJECT_CAT_OVERRIDE = {
+    "nail salon":       ["I built {name} a nail salon website (free preview)",
+                         "Your {name} clients can't find you online",
+                         "{name} doesn't show up for nail salons near me",
+                         "Free nail salon website preview — {name}",
+                         "I made a nail salon site for {name} — see it",
+                         "{name} is missing from Google Maps",
+                         "Quick question for {name}"],
+    "hair salon":       ["I built {name} a hair salon website (free preview)",
+                         "Your {name} clients can't find you online",
+                         "{name} doesn't show up for hair salons near me",
+                         "Free hair salon website preview — {name}",
+                         "I made a salon site for {name} — take a look",
+                         "{name} isn't showing up on Google",
+                         "Quick question for {name}"],
+    "barbershop":       ["I built {name} a barbershop website (free preview)",
+                         "Your {name} customers can't find you online",
+                         "{name} doesn't show up for barbers near me",
+                         "Free barber website preview — {name}",
+                         "I made a barbershop site for {name} — see it",
+                         "{name} is missing from Google",
+                         "Quick question for {name}"],
+    "restaurant":       ["I built {name} a restaurant website (free preview)",
+                         "Your {name} customers can't find your menu online",
+                         "{name} doesn't show up for restaurants near me",
+                         "Free restaurant website preview — {name}",
+                         "I made a restaurant site for {name} — take a look",
+                         "{name} isn't showing up on Google",
+                         "Quick question for {name}"],
+    "auto repair":      ["{name} is missing from Google — I built a site",
+                         "Your {name} customers can't find you online",
+                         "{name} doesn't show up for auto repair near me",
+                         "Free auto shop website preview — {name}",
+                         "I made an auto repair site for {name}",
+                         "{name} isn't showing up on Google Maps",
+                         "Quick question for {name}"],
+    "cleaning service": ["I built {name} a cleaning website (free preview)",
+                         "Your {name} customers can't find you online",
+                         "{name} doesn't show up for cleaning services near me",
+                         "Free cleaning website preview — {name}",
+                         "I made a cleaning service site for {name}",
+                         "{name} isn't showing up on Google",
+                         "Quick question for {name}"],
+}
 
 def get_subject(name: str, category: str) -> str:
-    """Return a category-specific email subject, or the generic fallback."""
-    cat = normalize_category(name, category).strip().lower()
-    template = _SUBJECT_MAP.get(cat)
-    if not template:
-        for key, tpl in _SUBJECT_MAP.items():
+    """Return a subject line rotated by day of week (7 angles, category-specific)."""
+    import datetime
+    cat  = normalize_category(name, category).strip().lower()
+    dow  = datetime.date.today().weekday()   # 0=Mon … 6=Sun
+
+    angles = _SUBJECT_CAT_OVERRIDE.get(cat)
+    if not angles:
+        # Try partial match against override keys
+        for key, angle_list in _SUBJECT_CAT_OVERRIDE.items():
             if key in cat:
-                template = tpl
+                angles = angle_list
                 break
-    if template:
-        return template.replace("{name}", name)
-    return f"I built {name} a website"
+    if not angles:
+        # Fall back to generic angles, injecting category hint where possible
+        tpl = _SUBJECT_MAP.get(cat)
+        if not tpl:
+            for key, t in _SUBJECT_MAP.items():
+                if key in cat:
+                    tpl = t
+                    break
+        if tpl:
+            # Build 7 variants around the category-specific wording
+            base = tpl.replace("{name}", "{name}")
+            angles = [
+                base,
+                "Your {name} customers can't find you — I made a site",
+                "{name} doesn't show up online — I fixed that for free",
+                "Free website preview for {name}",
+                "I put together a site for {name} — take a look",
+                "{name} is missing from Google — I built something",
+                "Quick question about {name}'s online presence",
+            ]
+        else:
+            angles = _SUBJECT_ANGLES
+
+    return angles[dow % len(angles)].replace("{name}", name)
 
 # HTML template path — sits next to this script's parent directory
 _SCRIPT_DIR   = Path(__file__).parent
@@ -344,17 +542,18 @@ _TEMPLATE_PATH = _SCRIPT_DIR.parent / "webbymaaya-email-template.html"
 
 # Plain-text fallback (shown by email clients that block HTML)
 EMAIL_PLAIN_TEMPLATE = """\
-{mockup_hero}I put together a website for {business_name} — you don't have one online yet, \
-and anyone in {city} searching for a {business_type} right now can't find you.
+{mockup_hero}{opener}
 
-{social_proof}I'm Maya, a web designer based in Philly. If you want it live, it's $799 flat \
-and ready in 7 days. No monthly fees, no tech work on your end — I handle everything.
+{review_hook}{pain_point}
+I'm Maya, a web designer based in Philly. I built {business_name} a free preview — \
+Starting at $499 — live in 7 days. No monthly fees, no tech work on your end.
 
-Reply here or fill out my 2-minute form to get started:
-https://webbymaya.com/book
+Just reply YES to this email and I'll send everything over.
 
 Maya Sierra
 WebByMaya.com · maya@webbymaya.com
+
+P.S. {ps_line}
 """
 
 # Category → friendly description map
@@ -396,76 +595,226 @@ def _get_mockup_url(name: str, category: str, phone: str = "", city: str = "Phil
         import sys as _sys
         _sys.path.insert(0, str(_SCRIPT_DIR))
         from mockup_uploader import upload_mockup
-        return upload_mockup(name, category, phone, city)
+        return upload_mockup(name, category, phone, city, address)
     except Exception:
         return ""
 
 
-def build_email_body(name: str, category: str, phone: str = "", city: str = "Philadelphia, PA",
-                     mockup_url: str = "", rating: str = "", review_count: str = "") -> tuple[str, str]:
-    """Return (plain_text, html) tuple for the given business."""
-    friendly     = _friendly_type(category)
-    city_display = city.split(",")[0].strip() if city else "your area"
+# Category-specific pain points — what each business type loses without a website
+_CAT_PAIN = {
+    "nail salon":       "Nail salon clients almost always search online before they walk in. Right now those searches are sending them to your competitors.",
+    "hair salon":       "Most people won't call a salon they can't look up first — they want to see the work, read reviews, and book online. You're losing those clients daily.",
+    "barbershop":       "When someone new to {neighborhood} searches 'barbershop near me,' {name} doesn't come up. First impressions happen online now.",
+    "spa":              "Spa clients research before they commit. Without a website, you're invisible to exactly the people who are ready to pay for what you offer.",
+    "massage":          "Massage clients want to see your services, pricing, and reviews before they call. A website is what turns a searcher into a booking.",
+    "restaurant":       "People decide where to eat by searching online — if there's no website, no menu, no hours, they pick someone else. It's that fast.",
+    "cafe":             "Coffee regulars are built online now. People search, read reviews, then walk in. You're missing every person who looked you up first.",
+    "bakery":           "Catering orders, event cakes, custom orders — all of that business goes to bakeries with a website. You're leaving money on the table.",
+    "auto repair":      "When someone's car breaks down in {neighborhood}, they pull out their phone. {name} doesn't come up — so they call whoever does.",
+    "cleaning service": "Most cleaning clients search online before calling anyone. A professional website turns those Google searches into calls directly to you.",
+    "barbershop":       "When someone moves to {neighborhood}, the first thing they do is search 'barber near me.' Right now {name} isn't showing up.",
+    "tattoo parlor":    "Tattoo clients spend hours researching artists online. Without a portfolio site, you're invisible to the clients willing to pay for quality work.",
+    "florist":          "Wedding and event clients shortlist florists from Google before ever making a call. Without a website you're not even in the running.",
+    "gym":              "Most people join a gym after checking it out online. Photos, membership prices, class schedule — if it's not on a site, they go somewhere else.",
+    "pet grooming":     "Pet owners are protective — they want to see your setup, read reviews, and know you're legit before they hand over their dog. A website builds that trust.",
+    "photographer":     "Your portfolio is your pitch. Without a website, potential clients can't find your work, and you lose bookings to photographers who do have one.",
+}
 
-    # ── Social proof line (rating + review count) ─────────────────────────
-    social_proof_plain = ""
-    social_proof_html  = ""
+_CAT_PS = {
+    "nail salon":       "I can have your new site ranking for '{neighborhood} nail salon' searches within 30 days of going live.",
+    "hair salon":       "The site includes an online booking button — so clients can schedule directly without calling.",
+    "barbershop":       "I include a booking button so new clients can book a cut without having to hunt down your number.",
+    "restaurant":       "The site includes your menu, hours, and a Google Maps embed so customers can find and order from you in seconds.",
+    "auto repair":      "I'll make sure your site shows up when people search 'auto repair near {neighborhood}' — that's the traffic that actually converts.",
+    "cleaning service": "I write the copy for you — services, pricing, areas covered. You don't touch anything.",
+    "spa":              "I can add an online booking link straight to your booking software — no extra monthly cost.",
+    "massage":          "I include a services + pricing page so clients know exactly what they're getting before they book.",
+    "tattoo parlor":    "I'll build out a portfolio page with your best work so clients can see your style before reaching out.",
+    "photographer":     "Your gallery will be front and center — fast-loading, mobile-ready, built to book.",
+}
+
+_DEFAULT_PAIN = "When someone in {neighborhood} searches for a {type} right now, they find your competitors — not you. A website fixes that."
+_DEFAULT_PS   = "The preview I built already has your phone number, address, and photos pulled in — it would take me 7 days to make it live."
+
+
+def _neighborhood(city: str, address: str) -> str:
+    """Extract the most specific location label for email copy."""
+    if address:
+        parts = [p.strip() for p in address.split(",")]
+        # Address format: "123 Main St, Neighborhood, City, State ZIP"
+        if len(parts) >= 3:
+            candidate = parts[1]
+            if candidate and not candidate[0].isdigit() and len(candidate) > 3:
+                return candidate
+    return city.split(",")[0].strip() if city else "your area"
+
+
+# ---------------------------------------------------------------------------
+# Shared email design helpers — used by this script and all follow-up scripts
+# ---------------------------------------------------------------------------
+
+_UNSUB_BASE = "https://ycsauzlqsjjbusugshpz.supabase.co/storage/v1/object/public/mockups/unsubscribe.html"
+
+def html_card(body_html: str, email: str = "") -> str:
+    """Wrap body_html in the standard WebByMaya branded email card."""
+    import urllib.parse as _up
+    unsub_url = _UNSUB_BASE + (f"?email={_up.quote(email)}" if email else "")
+    return (
+        '<!DOCTYPE html><html><head>'
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '</head><body style="margin:0;padding:0;background:#f0ede8;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0ede8;">'
+        '<tr><td align="center" style="padding:28px 12px;">'
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0"'
+        ' style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;'
+        'overflow:hidden;border:1px solid #e4dfd8;">'
+        '<tr><td style="background:#C9A96E;height:3px;font-size:0;line-height:3px;">&nbsp;</td></tr>'
+        '<tr><td style="padding:20px 36px 0;">'
+        '<p style="margin:0;font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;'
+        'color:#C9A96E;font-family:Arial,sans-serif;">WebByMaya</p>'
+        '</td></tr>'
+        '<tr><td style="padding:22px 36px 30px;">'
+        + body_html
+        + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">'
+        '<tr><td style="border-top:1px solid #eeeeee;padding-top:16px;">'
+        '<p style="margin:0 0 5px;font-size:12px;color:#bbbbbb;font-family:Arial,sans-serif;line-height:1.9;">'
+        'Maya Sierra &nbsp;&middot;&nbsp; '
+        '<a href="https://webbymaya.com" style="color:#C9A96E;text-decoration:none;font-weight:600;">'
+        'WebByMaya.com</a> &nbsp;&middot;&nbsp; maya@webbymaya.com</p>'
+        f'<p style="margin:0;font-size:11px;color:#cccccc;font-family:Arial,sans-serif;">'
+        f'Philadelphia, PA &nbsp;&middot;&nbsp; '
+        f'<a href="{unsub_url}" style="color:#cccccc;text-decoration:underline;">Unsubscribe</a></p>'
+        '</td></tr></table>'
+        '</td></tr>'
+        '</table>'
+        '</td></tr></table>'
+        '</body></html>'
+    )
+
+
+def _ep(text: str, muted: bool = False, small: bool = False, italic: bool = False) -> str:
+    """Standard email paragraph."""
+    color  = "#999999" if muted else "#1c1c1c"
+    size   = "13px" if small else "15px"
+    style_ = f"font-style:italic;" if italic else ""
+    return (
+        f'<p style="margin:0 0 18px;font-size:{size};line-height:1.8;'
+        f'color:{color};font-family:Arial,sans-serif;{style_}">{text}</p>'
+    )
+
+
+def _ecta(url: str, label: str, dark: bool = False) -> str:
+    """Email CTA — gold button (default) or dark card with gold text."""
+    if dark:
+        return (
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+            ' style="margin:4px 0 24px;">'
+            '<tr><td style="background:#1a1a1a;border-radius:8px;padding:18px 24px;">'
+            f'<p style="margin:0;font-size:16px;font-weight:700;color:#ffffff;'
+            f'font-family:Arial,sans-serif;line-height:1.5;">{label}</p>'
+            '</td></tr></table>'
+        )
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" width="100%"'
+        ' style="margin:20px 0 24px;">'
+        '<tr><td align="center">'
+        f'<a href="{url}" style="display:inline-block;background:#C9A96E;color:#0d0d0d;'
+        f'padding:14px 36px;border-radius:6px;font-weight:800;font-size:15px;'
+        f'font-family:Arial,sans-serif;text-decoration:none;">{label}</a>'
+        '</td></tr></table>'
+    )
+
+
+def build_email_body(name: str, category: str, phone: str = "", city: str = "Philadelphia, PA",
+                     mockup_url: str = "", rating: str = "", review_count: str = "",
+                     address: str = "", to_email: str = "") -> tuple[str, str]:
+    """Return (plain_text, html) tuple for the given business."""
+    import datetime as _dt, urllib.parse as _up
+    friendly      = _friendly_type(category)
+    cat           = (category or "").strip().lower()
+    neighborhood  = _neighborhood(city, address)
+    city_display  = city.split(",")[0].strip() if city else "your area"
+
     try:
         r  = float(rating) if rating else 0.0
         rc = int(review_count) if review_count else 0
-        if r >= 4.0:
-            stars = f"{r:g}-star rating"
-            reviews_txt = f" with {rc} reviews" if rc > 0 else ""
-            social_proof_plain = (
-                f"I noticed {name} has a {stars}{reviews_txt} — "
-                f"you deserve a site that shows it off.\n\n"
-            )
-            social_proof_html = (
-                f'<p style="margin:0 0 20px;font-size:15px;line-height:1.7;'
-                f'color:#666666;font-style:italic;border-left:3px solid #C9A96E;'
-                f'padding-left:14px;">'
-                f'I noticed <strong>{name}</strong> has a <strong>{stars}</strong>'
-                + (f' with <strong>{rc} reviews</strong>' if rc > 0 else '')
-                + ' — you deserve a site that shows it off.</p>'
-            )
     except (ValueError, TypeError):
-        pass
+        r, rc = 0.0, 0
 
-    # ── Mockup hero block ─────────────────────────────────────────────────
+    # ── Opener — specific to their review situation ───────────────────────
+    if rc >= 100:
+        opener = f"I came across {name} on Yelp — {rc} reviews and a {r:g}-star rating. Impressive. But you don't have a website, which means all those happy customers can't send anyone new your way."
+    elif rc >= 30:
+        opener = f"I found {name} on Yelp — {rc} reviews, {r:g} stars. You've clearly built something real. The problem is, none of that shows up when someone searches for a {friendly} in {neighborhood}."
+    elif rc >= 5 and r >= 4.0:
+        opener = f"I noticed {name} on Yelp — {r:g} stars, {rc} reviews. You have happy customers, but no website means the next one can't find you."
+    else:
+        opener = f"I came across {name} while looking at {friendly} businesses in {neighborhood}. You don't have a website yet — and that's costing you customers every day."
+
+    # ── Review hook (only if meaningful data) ────────────────────────────
+    review_hook = ""
+    if rc >= 50:
+        review_hook = f"You have {rc} people who already trust {name}. A website turns those reviews into referrals — new customers who find you on Google because your happy customers sent them.\n\n"
+    elif rc >= 10:
+        review_hook = f"With {rc} Yelp reviews, you've already proven the business works. A website just makes sure new customers can actually find it.\n\n"
+
+    # ── Category-specific pain point ──────────────────────────────────────
+    pain_raw  = _CAT_PAIN.get(cat, _DEFAULT_PAIN)
+    pain_point = pain_raw.replace("{neighborhood}", neighborhood).replace("{name}", name).replace("{type}", friendly)
+
+    # ── P.S. line ────────────────────────────────────────────────────────
+    ps_raw  = _CAT_PS.get(cat, _DEFAULT_PS)
+    ps_line = ps_raw.replace("{neighborhood}", neighborhood).replace("{name}", name).replace("{type}", friendly)
+
+    # ── Add UTM params to mockup URL for click attribution ────────────────
+    utm_url = mockup_url
+    if mockup_url and mockup_url.startswith("http"):
+        utm_cat = _re.sub(r"[^a-z0-9]+", "-", cat) if cat else "general"
+        utm_url = mockup_url + "?" + _up.urlencode({
+            "utm_source":   "email",
+            "utm_medium":   "outreach",
+            "utm_campaign": utm_cat,
+            "utm_content":  _dt.date.today().isoformat(),
+        })
+
+    # ── Mockup hero (table row — injected into card) ─────────────────────
     mockup_hero_plain = ""
-    mockup_hero_html  = ""
-    if mockup_url:
-        mockup_hero_plain = f"I built a website preview for {name}:\n{mockup_url}\n\n"
+    mockup_hero_tr    = ""
+    if utm_url:
+        mockup_hero_plain = f"Here's the preview I built for you:\n{utm_url}\n\n"
 
-        # Try to capture a Playwright screenshot to embed as inline image
-        screenshot_img_tag = ""
-        try:
-            from capture_mockup_screenshot import screenshot_html_for_email
-            b64 = screenshot_html_for_email(name, category)
-            if b64:
-                screenshot_img_tag = (
-                    f'<a href="{mockup_url}" style="display:block;text-decoration:none;margin-bottom:10px;">'
-                    f'<img src="data:image/png;base64,{b64}" alt="Website preview for {name}" '
-                    f'width="540" style="width:100%;max-width:540px;border-radius:6px;display:block;'
-                    f'border:1px solid #1e1e1e;" /></a>'
-                )
-        except Exception:
-            pass
+        mockup_hero_tr = (
+            '<tr><td style="background:#111111;padding:28px 36px;text-align:center;">'
+            f'<p style="margin:0 0 14px;font-size:10px;font-weight:700;letter-spacing:3px;'
+            f'text-transform:uppercase;color:#C9A96E;font-family:Arial,sans-serif;">'
+            f'I built this for {name}</p>'
+            + f'<a href="{utm_url}" style="display:inline-block;background:#C9A96E;color:#0d0d0d;'
+            f'padding:14px 36px;border-radius:6px;font-weight:800;font-size:15px;'
+            f'font-family:Arial,sans-serif;text-decoration:none;letter-spacing:0.4px;">'
+            '&#128064;&nbsp;&nbsp;See Your Website Preview &rarr;</a>'
+            '<p style="margin:12px 0 0;font-size:11px;color:#555;font-family:Arial,sans-serif;">'
+            'Takes 30 seconds &nbsp;&middot;&nbsp; No sign-up needed</p>'
+            '</td></tr>'
+        )
 
-        mockup_hero_html = (
+    # ── Social proof (inline pull-quote, plain text + HTML) ──────────────
+    social_proof_plain = ""
+    social_proof_html  = ""
+    if rc >= 5 and r >= 4.0:
+        stars = f"{r:g}★"
+        rev   = f", {rc} Yelp reviews" if rc > 0 else ""
+        social_proof_plain = f"{name} — {stars}{rev}. You've built something real. Let's make sure people can find it.\n\n"
+        social_proof_html  = (
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
-            ' style="margin:0 0 28px;">'
-            '<tr><td style="background:#0d0d0d;border-radius:8px;padding:20px 28px;text-align:center;">'
-            f'<div style="font-family:Arial,sans-serif;font-size:11px;text-transform:uppercase;'
-            f'letter-spacing:2px;color:#C9A96E;margin-bottom:12px;">I built this for {name}</div>'
-            + screenshot_img_tag
-            + f'<a href="{mockup_url}" style="display:inline-block;background:#C9A96E;color:#0d0d0d;'
-            f'padding:14px 32px;border-radius:6px;font-weight:800;font-size:15px;'
-            f'font-family:Arial,sans-serif;text-decoration:none;letter-spacing:0.3px;">'
-            '&#128064;&nbsp; See Your Website Preview &rarr;'
-            '</a>'
-            '<div style="font-family:Arial,sans-serif;font-size:12px;color:#666;margin-top:10px;">'
-            'Ready to launch — takes 2 minutes to look at</div>'
+            ' style="margin:0 0 20px;">'
+            '<tr><td style="border-left:3px solid #C9A96E;padding:10px 16px;background:#faf9f7;'
+            'border-radius:0 4px 4px 0;">'
+            f'<p style="margin:0;font-size:13px;color:#666666;font-style:italic;'
+            f'line-height:1.65;font-family:Arial,sans-serif;">'
+            f'<strong style="color:#1a1a1a;">{name}</strong> &mdash; '
+            f'<strong style="color:#1a1a1a;">{r:g}&#9733;</strong>'
+            + (f'&nbsp;<strong style="color:#1a1a1a;">{rc} Yelp reviews</strong>' if rc > 0 else '')
+            + ". You've built something real. Let's make sure people can find it.</p>"
             '</td></tr></table>'
         )
 
@@ -474,36 +823,59 @@ def build_email_body(name: str, category: str, phone: str = "", city: str = "Phi
         business_type=friendly,
         city=city_display,
         mockup_hero=mockup_hero_plain,
+        opener=opener,
+        review_hook=review_hook,
+        pain_point=pain_point,
+        ps_line=ps_line,
         social_proof=social_proof_plain,
     )
 
-    if _TEMPLATE_PATH.exists():
-        raw_html = _TEMPLATE_PATH.read_text(encoding="utf-8")
-        html = (raw_html
-                .replace("{business_name}", name)
-                .replace("{business_type}",  friendly)
-                .replace("{city}",           city_display)
-                .replace("{mockup_hero}",    mockup_hero_html)
-                .replace("{social_proof}",   social_proof_html))
-    else:
-        html = (
-            f'<html><body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto">'
-            + (f'<p style="background:#0d0d0d;padding:20px;border-radius:8px;text-align:center">'
-               f'<a href="{mockup_url}" style="background:#C9A96E;color:#111;padding:12px 24px;'
-               f'text-decoration:none;font-weight:bold;border-radius:3px;display:inline-block">'
-               f'&#128064; See Your Website Preview &rarr;</a></p>' if mockup_url else '')
-            + (f'<p><em>{social_proof_plain.strip()}</em></p>' if social_proof_plain else '')
-            + f'<p>I put together a website for <strong>{name}</strong> — you don\'t have one online yet, '
-            f'and anyone in {city_display} searching for a {friendly} right now can\'t find you.</p>'
-            f'<p>I\'m Maya, a web designer based in Philly. If you want it live, it\'s <strong>$799 flat</strong> '
-            f'and ready in 7 days. No monthly fees, no tech work on your end — I handle everything.</p>'
-            f'<p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#111;'
-            f'padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:3px;'
-            f'display:inline-block">Get started — 2 min form &rarr;</a></p>'
-            f'<p style="color:#888;font-size:12px">Or just reply to this email.<br><br>'
-            f'Maya Sierra &middot; <a href="https://webbymaya.com">WebByMaya.com</a></p>'
-            f'</body></html>'
+    review_hook_html = _ep(review_hook.strip()) if review_hook.strip() else ""
+
+    body = (
+        social_proof_html
+        + _ep(opener)
+        + review_hook_html
+        + _ep(pain_point)
+        + _ep(
+            f"I'm Maya, a web designer based in Philly. I built {name} a free preview — "
+            f"<strong>starting at $499</strong>, live in 7 days. No monthly fees, no tech work on your end."
         )
+        + _ecta("", f'Just reply <span style="color:#C9A96E;">YES</span> to this email and I\'ll send everything over.', dark=True)
+        + _ep(f"P.S. {ps_line}", muted=True, small=True, italic=True)
+    )
+
+    # Cold outreach email has an optional dark hero band — can't use plain html_card()
+    html = (
+        '<!DOCTYPE html><html><head>'
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '</head><body style="margin:0;padding:0;background:#f0ede8;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0ede8;">'
+        '<tr><td align="center" style="padding:28px 12px;">'
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0"'
+        ' style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;'
+        'overflow:hidden;border:1px solid #e4dfd8;">'
+        '<tr><td style="background:#C9A96E;height:3px;font-size:0;line-height:3px;">&nbsp;</td></tr>'
+        '<tr><td style="padding:22px 36px 0;">'
+        '<p style="margin:0;font-size:10px;font-weight:700;letter-spacing:3px;'
+        'text-transform:uppercase;color:#C9A96E;font-family:Arial,sans-serif;">WebByMaya</p>'
+        '</td></tr>'
+        + mockup_hero_tr
+        + '<tr><td style="padding:26px 36px 30px;">'
+        + body
+        + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">'
+        '<tr><td style="border-top:1px solid #eeeeee;padding-top:16px;">'
+        '<p style="margin:0 0 5px;font-size:12px;color:#bbbbbb;font-family:Arial,sans-serif;line-height:1.9;">'
+        'Maya Sierra &nbsp;&middot;&nbsp; '
+        '<a href="https://webbymaya.com" style="color:#C9A96E;text-decoration:none;font-weight:600;">'
+        'WebByMaya.com</a> &nbsp;&middot;&nbsp; maya@webbymaya.com</p>'
+        + f'<p style="margin:0;font-size:11px;color:#cccccc;font-family:Arial,sans-serif;">'
+        f'Philadelphia, PA &nbsp;&middot;&nbsp; '
+        f'<a href="{_UNSUB_BASE + ("?email=" + __import__("urllib.parse", fromlist=["quote"]).quote(to_email) if to_email else "")}" '
+        f'style="color:#cccccc;text-decoration:underline;">Unsubscribe</a></p>'
+        + '</td></tr></table>'
+        '</td></tr></table></td></tr></table></body></html>'
+    )
 
     return plain, html
 
@@ -633,6 +1005,147 @@ def _send_via_brevo(to: str, subject: str, plain: str, html: str) -> bool:
         return False
 
 
+def _send_via_brevo2(to: str, subject: str, plain: str, html: str) -> bool:
+    """Second Brevo account — another free 300/day."""
+    import urllib.request, urllib.error
+    if not BREVO_API_KEY_2 or "brevo2" in _exhausted_providers:
+        return False
+    payload = json.dumps({
+        "sender":      {"email": SENDER_EMAIL, "name": SENDER_NAME},
+        "to":          [{"email": to}],
+        "subject":     subject,
+        "textContent": plain,
+        "htmlContent": html,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email", data=payload,
+        headers={"api-key": BREVO_API_KEY_2, "Content-Type": "application/json"},
+        method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:300]
+        if e.code in (400, 402, 429) or "limit" in body.lower() or "quota" in body.lower() or "credit" in body.lower() or "dailySendingLimit" in body:
+            print("  [Brevo2] Daily limit reached — switching to Mailgun.")
+            _exhausted_providers.add("brevo2")
+            _mark_exhausted("brevo2")
+        else:
+            print(f"  [BREVO2 ERROR] {e.code}: {body}")
+        return False
+    except Exception as exc:
+        print(f"  [BREVO2 ERROR] {exc}")
+        return False
+
+
+_sendpulse_token: dict = {}  # {"token": str, "expires": float}
+
+def _sendpulse_access_token() -> str:
+    """Return SendPulse bearer token — direct API key or OAuth2 client credentials."""
+    import time as _time, urllib.request
+    # Direct API key (sp_apikey_... format) — use as-is
+    if SENDPULSE_API_KEY:
+        return SENDPULSE_API_KEY
+    # OAuth2 fallback (client_id + client_secret)
+    now = _time.time()
+    if _sendpulse_token.get("token") and _sendpulse_token.get("expires", 0) > now + 60:
+        return _sendpulse_token["token"]
+    if not SENDPULSE_CLIENT_ID or not SENDPULSE_CLIENT_SEC:
+        return ""
+    payload = json.dumps({
+        "grant_type":    "client_credentials",
+        "client_id":     SENDPULSE_CLIENT_ID,
+        "client_secret": SENDPULSE_CLIENT_SEC,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.sendpulse.com/oauth/access_token",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST")
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        _sendpulse_token["token"]   = resp["access_token"]
+        _sendpulse_token["expires"] = now + resp.get("expires_in", 3600)
+        return _sendpulse_token["token"]
+    except Exception as exc:
+        print(f"  [SendPulse] Token fetch failed: {exc}")
+        return ""
+
+
+def _send_via_sendpulse(to: str, subject: str, plain: str, html: str) -> bool:
+    """SendPulse SMTP API — 15,000 emails/month free forever (~500/day)."""
+    import urllib.request, urllib.error
+    if not (SENDPULSE_API_KEY or SENDPULSE_CLIENT_ID) or "sendpulse" in _exhausted_providers:
+        return False
+    token = _sendpulse_access_token()
+    if not token:
+        return False
+    payload = json.dumps({
+        "email": {
+            "html":    html,
+            "text":    plain,
+            "subject": subject,
+            "from":    {"name": SENDER_NAME, "email": SENDER_EMAIL},
+            "to":      [{"email": to}],
+        }
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.sendpulse.com/smtp/emails",
+        data=payload,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:300]
+        if e.code == 429 or "limit" in body.lower() or "quota" in body.lower():
+            print("  [SendPulse] Daily limit reached — switching to Mailgun.")
+            _exhausted_providers.add("sendpulse")
+            _mark_exhausted("sendpulse")
+        else:
+            print(f"  [SENDPULSE ERROR] {e.code}: {body}")
+        return False
+    except Exception as exc:
+        print(f"  [SENDPULSE ERROR] {exc}")
+        return False
+
+
+def _send_via_mailgun(to: str, subject: str, plain: str, html: str) -> bool:
+    """Mailgun — free trial 5,000 emails/3 months, then ~$0.10/1k. Requires DNS setup on webbymaya.com."""
+    import urllib.request, urllib.error, urllib.parse, base64 as _b64
+    if not MAILGUN_API_KEY or "mailgun" in _exhausted_providers:
+        return False
+    data = urllib.parse.urlencode({
+        "from":    f"{SENDER_NAME} <maya@{MAILGUN_DOMAIN}>",
+        "to":      to,
+        "subject": subject,
+        "text":    plain,
+        "html":    html,
+    }).encode("utf-8")
+    creds = _b64.b64encode(f"api:{MAILGUN_API_KEY}".encode()).decode()
+    req = urllib.request.Request(
+        f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages",
+        data=data,
+        headers={"Authorization": f"Basic {creds}"},
+        method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:300]
+        if e.code in (402, 429) or "limit" in body.lower() or "quota" in body.lower():
+            print("  [Mailgun] Daily limit reached — switching to Gmail.")
+            _exhausted_providers.add("mailgun")
+            _mark_exhausted("mailgun")
+        else:
+            print(f"  [MAILGUN ERROR] {e.code}: {body}")
+        return False
+    except Exception as exc:
+        print(f"  [MAILGUN ERROR] {exc}")
+        return False
+
+
 def _send_via_gmail(to: str, subject: str, plain: str, html: str) -> bool:
     import email.mime.multipart, email.mime.text, base64 as _b64
     import urllib.request, urllib.error
@@ -673,17 +1186,30 @@ def _send_via_gmail(to: str, subject: str, plain: str, html: str) -> bool:
 def send_email(to: str, subject: str, plain: str, html: str) -> tuple[bool, str]:
     """
     Smart tiered sending — auto-switches provider when daily limit hit:
-      1. SendGrid  (100/day free)
-      2. Brevo     (300/day free)
-      3. Gmail     (500/day free)
+      1. Brevo     (300/day free)
+      2. Brevo2    (300/day free — 2nd account)
+      3. SendGrid  (100/day free)
+      4. SendPulse (500/day free forever — 15k/month)
+      5. Mailgun   (5,000 free first 3 months, needs webbymaya.com DNS verified)
+      6. Gmail     (500/day free)
+    Total: up to 1,700/day when all providers are active.
     Returns (success, provider_used).
     """
-    if "sendgrid" not in _exhausted_providers and SENDGRID_API_KEY:
-        if _send_via_sendgrid(to, subject, plain, html):
-            return True, "sendgrid"
     if "brevo" not in _exhausted_providers and BREVO_API_KEY:
         if _send_via_brevo(to, subject, plain, html):
             return True, "brevo"
+    if "brevo2" not in _exhausted_providers and BREVO_API_KEY_2:
+        if _send_via_brevo2(to, subject, plain, html):
+            return True, "brevo2"
+    if "sendgrid" not in _exhausted_providers and SENDGRID_API_KEY:
+        if _send_via_sendgrid(to, subject, plain, html):
+            return True, "sendgrid"
+    if "sendpulse" not in _exhausted_providers and (SENDPULSE_API_KEY or SENDPULSE_CLIENT_ID):
+        if _send_via_sendpulse(to, subject, plain, html):
+            return True, "sendpulse"
+    if "mailgun" not in _exhausted_providers and MAILGUN_API_KEY:
+        if _send_via_mailgun(to, subject, plain, html):
+            return True, "mailgun"
     if "gmail" not in _exhausted_providers:
         if _send_via_gmail(to, subject, plain, html):
             return True, "gmail"
@@ -875,6 +1401,7 @@ LOG_COLUMNS = [
     "email_sent_to",
     "subject",
     "status",
+    "mockup_url",
     "notes",
 ]
 
@@ -996,9 +1523,8 @@ def main():
         mockup_url    = _get_mockup_url(name, category, phone, lead_city, prospect.get("address", ""))
         if mockup_url:
             print(f"  Mockup  : {mockup_url}")
-        plain, html   = build_email_body(name, category, phone, lead_city, mockup_url, rating, review_count)
-
         recipient_email = prospect.get("email", "").strip()
+        plain, html   = build_email_body(name, category, phone, lead_city, mockup_url, rating, review_count, address=prospect.get("address", ""), to_email=recipient_email)
 
         print(f"\n[{i+1}/{len(prospects)}] {name}  ({category})")
         print(f"  Address : {prospect.get('address', '')}")
@@ -1053,7 +1579,7 @@ def main():
                     if page_id:
                         mark_notion_contacted(page_id, today_str)
                         print(f"  Notion updated: Status → Contacted.")
-                    if all(p in _exhausted_providers for p in ("sendgrid", "brevo", "gmail")):
+                    if all(p in _exhausted_providers for p in ("sendgrid", "brevo", "brevo2", "gmail")):
                         print("\n  All email providers exhausted for today. Stopping.")
                         break
                 else:
@@ -1068,6 +1594,7 @@ def main():
             "email_sent_to":  recipient_email,
             "subject":        subject,
             "status":         status,
+            "mockup_url":     mockup_url,
             "notes":          note,
         })
 

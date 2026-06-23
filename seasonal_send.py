@@ -22,8 +22,16 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from batch_send_outreach import send_email
-SITE_PRICE = 799
+from batch_send_outreach import send_email, html_card, _ep, _ecta
+
+def _seasonal_html(hook: str, pitch: str, email: str = "") -> str:
+    return html_card(
+        _ep(hook)
+        + _ep(pitch)
+        + _ecta("", 'Reply <strong>&ldquo;show me&rdquo;</strong> and I\'ll send it right over.', dark=True)
+        + _ep("Starting at $499 &nbsp;&middot;&nbsp; Live in 7 days &nbsp;&middot;&nbsp; No monthly fees", muted=True, small=True),
+        email=email,
+    )
 
 # ── Campaign definitions ────────────────────────────────────────────────────────
 # Each campaign: name, month, day (of the holiday), lead_days window (start, end),
@@ -52,30 +60,16 @@ Reply "show me" and I'll send it over in minutes.
 — Maya, WebByMaya
 webbymaya.com
 """,
-        "html": """\
-<!DOCTYPE html><html><body style="background:#0a0a0a;color:#d8d8d8;font-family:Arial,sans-serif;padding:32px 24px;max-width:600px;margin:0 auto">
-<p style="font-size:15px;line-height:1.7">
-  <strong>Valentine's Day is one of the biggest spending days of the year</strong> — \
-  and customers are searching online <em>right now</em> for places to book.
-</p>
-<p style="font-size:15px;line-height:1.7;margin-top:16px">
-  I built a free mockup website for <strong style="color:#C9A96E">{name}</strong>. \
-  No obligation, no catch — I just want you to see what's possible before the holiday rush hits.
-</p>
-<div style="margin:28px 0;text-align:center">
-  <a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:14px 32px;border-radius:6px;font-weight:700;text-decoration:none;font-size:15px">
-    Reply "show me" to get your free mockup
-  </a>
-</div>
-<p style="color:#666;font-size:12px;margin-top:32px">— Maya &nbsp;·&nbsp; <a href="https://webbymaya.com" style="color:#C9A96E">webbymaya.com</a></p>
-<p style="color:#333;font-size:10px;margin-top:24px">To opt out reply STOP.</p>
-</body></html>
-""",
+        "html": lambda name, email="", **_: _seasonal_html(
+            "<strong>Valentine's Day is one of the biggest spending days of the year</strong> — and customers are searching online <em>right now</em> for places to book.",
+            f"I built a free mockup website for <strong>{name}</strong>. No obligation, no catch — I just want you to see what's possible before the holiday rush hits.",
+            email,
+        ),
     },
     {
         "name": "mothers_day",
         "label": "Mother's Day",
-        "month": 5, "day": 11,     # 2nd Sunday; approximate with May 11
+        "month": 5, "day": 11,
         "lead_days": (7, 21),
         "categories": [
             "florist", "nail salon", "hair salon", "spa", "massage",
@@ -89,35 +83,21 @@ the perfect gift, spa day, or dinner reservation.
 Businesses with a website get booked first. I put together a free site for \
 {name} that you can have live before the weekend rush.
 
-Just reply "yes" and I'll send the mockup right now.
+Just reply "show me" and I'll send the mockup right now.
 
 — Maya, WebByMaya
 """,
-        "html": """\
-<!DOCTYPE html><html><body style="background:#0a0a0a;color:#d8d8d8;font-family:Arial,sans-serif;padding:32px 24px;max-width:600px;margin:0 auto">
-<p style="font-size:15px;line-height:1.7">
-  Mother's Day is coming up fast — and moms across Philly are already looking \
-  for the perfect gift, spa day, or dinner reservation.
-</p>
-<p style="font-size:15px;line-height:1.7;margin-top:16px">
-  Businesses with a website get booked first. I put together a <strong style="color:#C9A96E">free site for {name}</strong> \
-  that you can have live before the weekend rush.
-</p>
-<div style="margin:28px 0;text-align:center">
-  <a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:14px 32px;border-radius:6px;font-weight:700;text-decoration:none;font-size:15px">
-    Reply "yes" — I'll send the mockup now
-  </a>
-</div>
-<p style="color:#666;font-size:12px;margin-top:32px">— Maya &nbsp;·&nbsp; <a href="https://webbymaya.com" style="color:#C9A96E">webbymaya.com</a></p>
-<p style="color:#333;font-size:10px;margin-top:24px">To opt out reply STOP.</p>
-</body></html>
-""",
+        "html": lambda name, email="", **_: _seasonal_html(
+            "Mother's Day is coming up fast — and moms across Philly are already looking for the perfect gift, spa day, or dinner reservation.",
+            f"Businesses with a website get booked first. I put together a free mockup for <strong>{name}</strong> that you can have live before the weekend rush.",
+            email,
+        ),
     },
     {
         "name": "summer",
         "label": "Summer Season",
         "month": 6, "day": 1,
-        "lead_days": (0, 91),   # covers all of June, July, August
+        "lead_days": (0, 91),
         "categories": [
             "restaurant", "bar", "cafe", "food truck", "catering",
             "hair salon", "nail salon", "barbershop", "outdoor fitness",
@@ -134,25 +114,11 @@ Reply "show me" and I'll send it over.
 
 — Maya, WebByMaya
 """,
-        "html": """\
-<!DOCTYPE html><html><body style="background:#0a0a0a;color:#d8d8d8;font-family:Arial,sans-serif;padding:32px 24px;max-width:600px;margin:0 auto">
-<p style="font-size:15px;line-height:1.7">
-  Summer foot traffic is the biggest opportunity of the year for local businesses — \
-  but only if people can <strong>find you online</strong>.
-</p>
-<p style="font-size:15px;line-height:1.7;margin-top:16px">
-  I built a free website mockup for <strong style="color:#C9A96E">{name}</strong>. \
-  Takes 2 minutes to look at, could bring in bookings all summer long.
-</p>
-<div style="margin:28px 0;text-align:center">
-  <a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:14px 32px;border-radius:6px;font-weight:700;text-decoration:none;font-size:15px">
-    Reply "show me" to get your free mockup
-  </a>
-</div>
-<p style="color:#666;font-size:12px;margin-top:32px">— Maya &nbsp;·&nbsp; <a href="https://webbymaya.com" style="color:#C9A96E">webbymaya.com</a></p>
-<p style="color:#333;font-size:10px;margin-top:24px">To opt out reply STOP.</p>
-</body></html>
-""",
+        "html": lambda name, email="", **_: _seasonal_html(
+            "Summer foot traffic is the biggest opportunity of the year for local businesses — but only if people can <strong>find you online</strong>.",
+            f"I built a free website mockup for <strong>{name}</strong>. Takes 2 minutes to look at, could bring in bookings all summer long.",
+            email,
+        ),
     },
     {
         "name": "back_to_school",
@@ -175,25 +141,11 @@ Just reply "show me" and I'll send it over.
 
 — Maya, WebByMaya
 """,
-        "html": """\
-<!DOCTYPE html><html><body style="background:#0a0a0a;color:#d8d8d8;font-family:Arial,sans-serif;padding:32px 24px;max-width:600px;margin:0 auto">
-<p style="font-size:15px;line-height:1.7">
-  Back-to-school season is one of the busiest times of year — parents are searching \
-  online for everything from haircuts to tutors to supplies.
-</p>
-<p style="font-size:15px;line-height:1.7;margin-top:16px">
-  I built a free website mockup for <strong style="color:#C9A96E">{name}</strong> \
-  so you can be ready when the rush hits. No cost, no commitment.
-</p>
-<div style="margin:28px 0;text-align:center">
-  <a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:14px 32px;border-radius:6px;font-weight:700;text-decoration:none;font-size:15px">
-    Reply "show me" to get your free mockup
-  </a>
-</div>
-<p style="color:#666;font-size:12px;margin-top:32px">— Maya &nbsp;·&nbsp; <a href="https://webbymaya.com" style="color:#C9A96E">webbymaya.com</a></p>
-<p style="color:#333;font-size:10px;margin-top:24px">To opt out reply STOP.</p>
-</body></html>
-""",
+        "html": lambda name, email="", **_: _seasonal_html(
+            "Back-to-school season is one of the busiest times of year — parents are searching online for everything from haircuts to tutors to supplies.",
+            f"I built a free website mockup for <strong>{name}</strong> so you can be ready when the rush hits. No cost, no commitment.",
+            email,
+        ),
     },
     {
         "name": "holiday",
@@ -217,25 +169,11 @@ Reply "show me" and I'll send it right now.
 
 — Maya, WebByMaya
 """,
-        "html": """\
-<!DOCTYPE html><html><body style="background:#0a0a0a;color:#d8d8d8;font-family:Arial,sans-serif;padding:32px 24px;max-width:600px;margin:0 auto">
-<p style="font-size:15px;line-height:1.7">
-  The holiday season is the <strong>biggest revenue window of the year</strong> — \
-  and people are already searching Google for local gifts, bookings, and experiences.
-</p>
-<p style="font-size:15px;line-height:1.7;margin-top:16px">
-  I built a free website mockup for <strong style="color:#C9A96E">{name}</strong>. \
-  Takes seconds to view, could make all the difference this December.
-</p>
-<div style="margin:28px 0;text-align:center">
-  <a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:14px 32px;border-radius:6px;font-weight:700;text-decoration:none;font-size:15px">
-    Reply "show me" to get your free mockup
-  </a>
-</div>
-<p style="color:#666;font-size:12px;margin-top:32px">— Maya &nbsp;·&nbsp; <a href="https://webbymaya.com" style="color:#C9A96E">webbymaya.com</a></p>
-<p style="color:#333;font-size:10px;margin-top:24px">To opt out reply STOP.</p>
-</body></html>
-""",
+        "html": lambda name, email="", **_: _seasonal_html(
+            "The holiday season is the <strong>biggest revenue window of the year</strong> — and people are already searching Google for local gifts, bookings, and experiences.",
+            f"I built a free website mockup for <strong>{name}</strong>. Takes seconds to view, could make all the difference this December.",
+            email,
+        ),
     },
     {
         "name": "new_year",
@@ -257,25 +195,11 @@ Reply "show me" and I'll send it over.
 
 — Maya, WebByMaya
 """,
-        "html": """\
-<!DOCTYPE html><html><body style="background:#0a0a0a;color:#d8d8d8;font-family:Arial,sans-serif;padding:32px 24px;max-width:600px;margin:0 auto">
-<p style="font-size:15px;line-height:1.7">
-  Every January, people flood search results looking for gyms, trainers, wellness spots, \
-  and health services. <strong>The businesses with websites get the calls.</strong>
-</p>
-<p style="font-size:15px;line-height:1.7;margin-top:16px">
-  I built a free mockup for <strong style="color:#C9A96E">{name}</strong>. \
-  No cost, no pressure — just a look.
-</p>
-<div style="margin:28px 0;text-align:center">
-  <a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:14px 32px;border-radius:6px;font-weight:700;text-decoration:none;font-size:15px">
-    Reply "show me" to get your free mockup
-  </a>
-</div>
-<p style="color:#666;font-size:12px;margin-top:32px">— Maya &nbsp;·&nbsp; <a href="https://webbymaya.com" style="color:#C9A96E">webbymaya.com</a></p>
-<p style="color:#333;font-size:10px;margin-top:24px">To opt out reply STOP.</p>
-</body></html>
-""",
+        "html": lambda name, email="", **_: _seasonal_html(
+            "Every January, people flood search results looking for gyms, trainers, wellness spots, and health services. <strong>The businesses with websites get the calls.</strong>",
+            f"I built a free mockup for <strong>{name}</strong>. No cost, no pressure — just a look.",
+            email,
+        ),
     },
 ]
 
@@ -429,7 +353,7 @@ def main():
 
             subject  = campaign["subject"].format(name=name)
             plain    = campaign["plain"].format(name=name, category=category)
-            html     = campaign["html"].format(name=name, category=category)
+            html     = campaign["html"](name=name, category=category, email=email)
 
             if args.dry_run:
                 print(f"  [DRY] → {email} | {name} | {subject}")

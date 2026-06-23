@@ -326,6 +326,44 @@ def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=50):
                 continue
 
             corrected_cat = _normalize_category(name, friendly_cat)
+
+            # ── Relevance gate ────────────────────────────────────────────────
+            # If normalization changed the category to something completely
+            # different from what we were searching for, this business doesn't
+            # belong in this search bucket — skip it entirely.
+            # Example: "Jae Seafood" returned in a nail salon search → drop it.
+            _FOOD_CATS   = {"restaurant","cafe","bakery","pizza","diner","bar",
+                            "juice bar","ice cream","food truck","catering","bbq"}
+            _BEAUTY_CATS = {"nail salon","hair salon","barbershop","spa","massage",
+                            "lash studio","beauty salon","waxing","tanning salon"}
+            _AUTO_CATS   = {"auto repair","tire shop","car wash","towing","auto tags"}
+            _HOME_CATS   = {"cleaning service","landscaping","plumber","electrician",
+                            "roofing","hvac","painter","moving company","handyman"}
+            _PET_CATS    = {"pet grooming","vet","dog walker","pet store"}
+
+            def _cat_group(c):
+                c = c.lower()
+                if c in _FOOD_CATS:   return "food"
+                if c in _BEAUTY_CATS: return "beauty"
+                if c in _AUTO_CATS:   return "auto"
+                if c in _HOME_CATS:   return "home"
+                if c in _PET_CATS:    return "pet"
+                return "other"
+
+            if _cat_group(corrected_cat) != _cat_group(friendly_cat):
+                seen_ids.add(biz_id)
+                print(f"  ✗ SKIP \"{name}\" — searched [{friendly_cat}] but name says [{corrected_cat}]")
+                continue
+
+            # Also drop skip-categories (auto tags, laundromats, etc.)
+            try:
+                from batch_send_outreach import _SKIP_CATEGORIES
+                if corrected_cat in _SKIP_CATEGORIES:
+                    seen_ids.add(biz_id)
+                    continue
+            except Exception:
+                pass
+
             prospects.append({
                 "name":          name,
                 "address":       address,
@@ -357,9 +395,10 @@ def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=50):
 
 def main():
     parser = argparse.ArgumentParser(description="WebByMaya Yelp Prospect Finder")
-    parser.add_argument("--city", help='City to search, e.g. "Philadelphia, PA"')
-    parser.add_argument("--zone", help="Named zone from zone_state.json")
-    parser.add_argument("--limit", type=int, default=200, help="Max businesses to check per category")
+    parser.add_argument("--city",   help='City to search, e.g. "Philadelphia, PA"')
+    parser.add_argument("--zone",   help="Named zone from zone_state.json")
+    parser.add_argument("--output", default="", help="Output CSV path (default: prospects_DATE.csv)")
+    parser.add_argument("--limit",  type=int, default=200, help="Max businesses to check per category")
     args = parser.parse_args()
 
     # Resolve location
@@ -373,7 +412,7 @@ def main():
         parser.print_help(); sys.exit(1)
 
     today     = datetime.date.today().strftime("%Y-%m-%d")
-    out_path  = SCRIPT_DIR / f"prospects_{today}.csv"
+    out_path  = Path(args.output) if args.output else SCRIPT_DIR / f"prospects_{today}.csv"
     seen_ids  = load_seen_place_ids()
 
     print(f"\n{'='*55}")

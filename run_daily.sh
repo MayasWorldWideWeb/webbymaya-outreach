@@ -31,6 +31,10 @@ export BREVO_SMTP_KEY="$(grep BREVO_SMTP_KEY ~/.zshrc | cut -d'"' -f2 2>/dev/nul
 export BREVO_SMTP_LOGIN="$(grep BREVO_SMTP_LOGIN ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
 export HERE_API_KEY="$(grep HERE_API_KEY ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
 export PEXELS_API_KEY="$(grep PEXELS_API_KEY ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
+export PIXABAY_API_KEY="$(grep PIXABAY_API_KEY ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
+export SUPABASE_URL="$(grep SUPABASE_URL ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
+export SUPABASE_SERVICE_KEY="$(grep SUPABASE_SERVICE_KEY ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
+export GMAIL_APP_PASSWORD="$(grep GMAIL_APP_PASSWORD ~/.zshrc | cut -d'"' -f2 2>/dev/null)"
 # Google Places API removed — Yelp + OSM cover it for free
 
 echo "" >> "$LOG"
@@ -89,12 +93,16 @@ if [ "$SKIP_OUTREACH" -eq 0 ]; then
     fi
 
     echo "" >> "$LOG"
+    echo "[2b] Syncing unsubscribes from Supabase → bounce_log.csv..." >> "$LOG"
+    $PYTHON "$SCRIPT_DIR/sync_unsubscribes.py" >> "$LOG" 2>&1
+
+    echo "" >> "$LOG"
     echo "[3/4] Checking bounces..." >> "$LOG"
     $PYTHON "$SCRIPT_DIR/check_bounces.py" >> "$LOG" 2>&1
 
     echo "" >> "$LOG"
     echo "[4/5] Sending outreach (email only — SMS disabled)..." >> "$LOG"
-    $PYTHON "$SCRIPT_DIR/scheduled_send.py" --sms-limit 0 --email-limit 900 >> "$LOG" 2>&1
+    $PYTHON "$SCRIPT_DIR/scheduled_send.py" --sms-limit 0 --email-limit 500 >> "$LOG" 2>&1
 else
     echo "" >> "$LOG"
     echo "[2-4] Skipping outreach steps (no new prospects)." >> "$LOG"
@@ -105,25 +113,10 @@ echo "" >> "$LOG"
 echo "[5/6] SMS follow-ups skipped (SMS disabled)." >> "$LOG"
 # $PYTHON "$SCRIPT_DIR/send_followups.py" >> "$LOG" 2>&1
 
-# ── Step 6: Send email follow-ups (7-day cadence) ────────────────────────
+# ── Step 6: Clicker follow-ups (48h after link click) ────────────────────
 echo "" >> "$LOG"
-echo "[6/7] Sending email follow-ups (round 1 — 7-day)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/email_followups.py" --safe-only >> "$LOG" 2>&1
-
-# ── Step 6b: Second follow-up (14-day last touch) ────────────────────────
-echo "" >> "$LOG"
-echo "[6b/7] Sending second follow-ups (round 2 — 14-day last touch)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/email_followups.py" --safe-only --round 2 >> "$LOG" 2>&1
-
-# ── Step 6c: Final goodbye (21-day closing-the-file) ─────────────────────
-echo "" >> "$LOG"
-echo "[6c/7] Sending goodbye follow-ups (round 3 -- 21-day closing file)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/email_followups.py" --safe-only --round 3 >> "$LOG" 2>&1
-
-# ── Step 7: Clicker follow-ups (48h after link click) ────────────────────
-echo "" >> "$LOG"
-echo "[7/7] Sending clicker follow-ups (48h after link click)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/clicker_followups.py" >> "$LOG" 2>&1
+echo "[6/7] Sending clicker follow-ups (48h after link click)..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/clicker_followups.py" --limit 50 >> "$LOG" 2>&1
 
 # ── Step 8: Auto-reply to hot leads + process opt-outs ───────────────────
 echo "" >> "$LOG"
@@ -140,19 +133,35 @@ if [ "$(date +%u)" = "7" ]; then
     echo "" >> "$LOG"
     echo "[CL] Posting to Craigslist (Sunday weekly run)..." >> "$LOG"
     $PYTHON "$SCRIPT_DIR/craigslist_poster.py" >> "$LOG" 2>&1
+
+    echo "" >> "$LOG"
+    echo "[DIG] Sending weekly digest email..." >> "$LOG"
+    $PYTHON -c "import sys; sys.path.insert(0,'$SCRIPT_DIR'); import dashboard; dashboard.send_weekly_digest()" >> "$LOG" 2>&1
 fi
 
-# ── Weekly: Re-engagement pass (Wednesdays only) ─────────────────────
-if [ "$(date +%u)" = "3" ]; then
+# ── 3x/week: Re-engagement pass (Tue / Wed / Thu) ────────────────────
+if [ "$(date +%u)" = "2" ] || [ "$(date +%u)" = "3" ] || [ "$(date +%u)" = "4" ]; then
     echo "" >> "$LOG"
     echo "[RE] Re-engagement pass (30-day no-response leads)..." >> "$LOG"
-    $PYTHON "$SCRIPT_DIR/reengagement_pass.py" --limit 50 >> "$LOG" 2>&1
+    $PYTHON "$SCRIPT_DIR/reengagement_pass.py" --limit 150 >> "$LOG" 2>&1
 fi
+
+# ── Follow-up sequences (day 3 / day 7 / day 14 drip) ───────────────────
+echo "" >> "$LOG"
+echo "[FU] Follow-up sequences (3-email drip on non-responders)..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/followup_send.py" --limit 250 >> "$LOG" 2>&1
 
 # ── Seasonal campaigns (Valentine's, summer, back-to-school, etc.) ───────
 echo "" >> "$LOG"
 echo "[SC] Seasonal campaign emails (holiday/event-targeted)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/seasonal_send.py" --limit 100 >> "$LOG" 2>&1
+$PYTHON "$SCRIPT_DIR/seasonal_send.py" --limit 200 >> "$LOG" 2>&1
+
+# ── Weekly (Fridays): Testimonial requests for recently-Live clients ─────
+if [ "$(date +%u)" = "5" ]; then
+    echo "" >> "$LOG"
+    echo "[TR] Sending testimonial requests to recently-Live clients..." >> "$LOG"
+    $PYTHON "$SCRIPT_DIR/testimonial_request.py" >> "$LOG" 2>&1
+fi
 
 # ── Instagram engagement ─────────────────────────────────────────────────
 echo "" >> "$LOG"

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Welcome to WebByMaya — Let's Build Your Site</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;color:#1a1a1a;line-height:1.6}
+  .header{background:#1a1a1a;padding:20px 24px;display:flex;align-items:center;gap:12px}
+  .header h1{color:#C9A96E;font-size:20px;font-weight:800;letter-spacing:-.5px}
+  .header span{color:#555;font-size:13px}
+  .container{max-width:640px;margin:32px auto;padding:0 20px 60px}
+  .welcome{background:#fff;border-radius:12px;padding:28px;margin-bottom:24px;border:1px solid #e8e8e8}
+  .welcome h2{font-size:22px;font-weight:800;margin-bottom:8px}
+  .welcome p{color:#666;font-size:14px}
+  .section{background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;border:1px solid #e8e8e8}
+  .section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#C9A96E;margin-bottom:16px}
+  label{display:block;font-size:13px;font-weight:600;color:#333;margin-bottom:5px;margin-top:14px}
+  label:first-of-type{margin-top:0}
+  input,textarea,select{width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-family:inherit;transition:border-color .15s;background:#fafafa}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:#C9A96E;background:#fff}
+  textarea{resize:vertical;min-height:90px}
+  .hint{font-size:11px;color:#999;margin-top:4px}
+  .color-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+  .color-opt{position:relative}
+  .color-opt input[type=radio]{position:absolute;opacity:0;width:0;height:0}
+  .color-opt label{display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;padding:8px;border-radius:8px;border:2px solid #eee;transition:border-color .15s;margin:0}
+  .color-opt input:checked + label{border-color:#C9A96E;background:#fffbf5}
+  .color-swatch{width:32px;height:32px;border-radius:50%;border:1px solid rgba(0,0,0,.08)}
+  .color-name{font-size:10px;color:#666;font-weight:600}
+  .upload-area{border:2px dashed #ddd;border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:border-color .15s;margin-top:8px}
+  .upload-area:hover{border-color:#C9A96E}
+  .upload-area input{display:none}
+  .upload-icon{font-size:28px;margin-bottom:8px}
+  .upload-text{font-size:13px;color:#666}
+  .upload-hint{font-size:11px;color:#aaa;margin-top:4px}
+  .preview-files{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .preview-item{background:#f0f0f0;border-radius:6px;padding:6px 10px;font-size:12px;color:#555;display:flex;align-items:center;gap:5px}
+  .btn-submit{width:100%;background:#C9A96E;color:#fff;border:none;padding:16px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;margin-top:24px;transition:background .15s}
+  .btn-submit:hover{background:#b8905a}
+  .btn-submit:disabled{background:#ccc;cursor:not-allowed}
+  .success{display:none;background:#fff;border-radius:12px;padding:40px;text-align:center;border:1px solid #e8e8e8}
+  .success-icon{font-size:48px;margin-bottom:16px}
+  .success h2{font-size:22px;font-weight:800;margin-bottom:8px}
+  .success p{color:#666;font-size:14px}
+  .error-msg{background:#fff0f0;border:1px solid #ffcdd2;border-radius:8px;padding:12px;color:#c0392b;font-size:13px;margin-top:12px;display:none}
+  .required{color:#e74c3c}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>WebByMaya</h1>
+    <span>Client Onboarding</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <div id="form-wrap">
+    <div class="welcome">
+      <h2>Let's build your site! 🎉</h2>
+      <p>Fill this out and I'll have everything I need to get started. Takes about 5 minutes. The more detail you give me, the better your site will be.</p>
+    </div>
+
+    <form id="onboard-form">
+
+      <div class="section">
+        <div class="section-title">Your Business</div>
+
+        <label>Business Name <span class="required">*</span></label>
+        <input type="text" id="business_name" required placeholder="e.g. Crimson Hair Studio">
+
+        <label>Your Name <span class="required">*</span></label>
+        <input type="text" id="client_name" required placeholder="e.g. Tanya Williams">
+
+        <label>Your Email <span class="required">*</span></label>
+        <input type="email" id="client_email" required placeholder="tanya@crimsonsalon.com">
+
+        <label>Phone Number</label>
+        <input type="tel" id="phone" placeholder="(215) 555-0100">
+
+        <label>Full Address</label>
+        <input type="text" id="address" placeholder="123 Main St, Philadelphia, PA 19103">
+      </div>
+
+      <div class="section">
+        <div class="section-title">About Your Business</div>
+
+        <label>What's your tagline or motto? <span class="hint">(the short phrase under your business name)</span></label>
+        <input type="text" id="tagline" placeholder="e.g. Where every cut is a masterpiece">
+
+        <label>Tell me about your business <span class="required">*</span></label>
+        <textarea id="about_text" required placeholder="How long have you been open? What makes you different? What do customers love most? Who do you serve? Be as specific as possible."></textarea>
+
+        <label>What services do you offer? <span class="required">*</span></label>
+        <textarea id="services" required placeholder="List each service and price if you'd like. E.g.&#10;- Cut & Style — $65&#10;- Color — from $120&#10;- Braids — from $80"></textarea>
+
+        <label>Business Hours</label>
+        <textarea id="hours" style="min-height:60px" placeholder="e.g.&#10;Mon-Fri: 9am–7pm&#10;Sat: 10am–6pm&#10;Sun: Closed"></textarea>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Your Style</div>
+
+        <label>What vibe do you want for your website?</label>
+        <div class="color-grid">
+          <div class="color-opt">
+            <input type="radio" name="color_preference" id="cp-warm" value="Warm & Welcoming (Gold/Cream)">
+            <label for="cp-warm">
+              <div class="color-swatch" style="background:linear-gradient(135deg,#C9A96E,#f5e6c8)"></div>
+              <span class="color-name">Warm</span>
+            </label>
+          </div>
+          <div class="color-opt">
+            <input type="radio" name="color_preference" id="cp-bold" value="Bold & Modern (Dark/Black)">
+            <label for="cp-bold">
+              <div class="color-swatch" style="background:linear-gradient(135deg,#1a1a1a,#444)"></div>
+              <span class="color-name">Bold</span>
+            </label>
+          </div>
+          <div class="color-opt">
+            <input type="radio" name="color_preference" id="cp-fresh" value="Fresh & Clean (White/Green)">
+            <label for="cp-fresh">
+              <div class="color-swatch" style="background:linear-gradient(135deg,#2ecc71,#fff)"></div>
+              <span class="color-name">Fresh</span>
+            </label>
+          </div>
+          <div class="color-opt">
+            <input type="radio" name="color_preference" id="cp-pro" value="Professional (Navy/Blue)">
+            <label for="cp-pro">
+              <div class="color-swatch" style="background:linear-gradient(135deg,#1a3a6e,#2980b9)"></div>
+              <span class="color-name">Professional</span>
+            </label>
+          </div>
+        </div>
+
+        <label style="margin-top:16px">Anything else about how you want the site to look or feel?</label>
+        <textarea id="website_notes" style="min-height:60px" placeholder="e.g. I love the look of [competitor site], I want it to feel luxury, I want lots of photos, etc."></textarea>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Your Logo</div>
+        <p class="hint" style="margin-bottom:10px">Upload your logo if you have one. PNG or JPG, any size.</p>
+        <div class="upload-area" onclick="document.getElementById('logo-input').click()">
+          <input type="file" id="logo-input" accept="image/*" onchange="previewFile(this,'logo-preview')">
+          <div class="upload-icon">🖼️</div>
+          <div class="upload-text">Click to upload your logo</div>
+          <div class="upload-hint">PNG, JPG, SVG — any size is fine</div>
+        </div>
+        <div id="logo-preview" class="preview-files"></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Photos of Your Business</div>
+        <p class="hint" style="margin-bottom:10px">Upload photos of your space, your work, or your team. More is better — at least 3 if you can.</p>
+        <div class="upload-area" onclick="document.getElementById('photos-input').click()">
+          <input type="file" id="photos-input" accept="image/*" multiple onchange="previewFiles(this,'photos-preview')">
+          <div class="upload-icon">📸</div>
+          <div class="upload-text">Click to upload photos</div>
+          <div class="upload-hint">Select multiple at once — JPG or PNG</div>
+        </div>
+        <div id="photos-preview" class="preview-files"></div>
+      </div>
+
+      <div id="error-msg" class="error-msg"></div>
+      <button type="submit" class="btn-submit" id="submit-btn">Submit My Content →</button>
+
+    </form>
+  </div>
+
+  <div class="success" id="success-wrap">
+    <div class="success-icon">✅</div>
+    <h2>You're all set!</h2>
+    <p>I received everything and will get started on your site right away.<br>
+    You'll hear from me within 24 hours with an update.<br><br>
+    Questions? Email <a href="mailto:maya@webbymaya.com" style="color:#C9A96E">maya@webbymaya.com</a></p>
+  </div>
+
+</div>
+
+<script>
+const SUPABASE_URL = 'https://ycsauzlqsjjbusugshpz.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5NTAzOTMxNH0._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI';
+
+// Get token from URL: /onboard?token=ABC123
+const token = new URLSearchParams(window.location.search).get('token') || 'direct';
+
+const logoFiles   = [];
+const photoFiles  = [];
+
+function previewFile(input, previewId) {
+  const preview = document.getElementById(previewId);
+  preview.innerHTML = '';
+  if (input.files[0]) {
+    logoFiles.length = 0;
+    logoFiles.push(input.files[0]);
+    preview.innerHTML = `<div class="preview-item">📎 ${input.files[0].name}</div>`;
+  }
+}
+
+function previewFiles(input, previewId) {
+  const preview = document.getElementById(previewId);
+  photoFiles.length = 0;
+  const files = Array.from(input.files);
+  files.forEach(f => photoFiles.push(f));
+  preview.innerHTML = files.map(f => `<div class="preview-item">📎 ${f.name}</div>`).join('');
+}
+
+async function uploadToStorage(file, path) {
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/client-uploads/${path}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': file.type,
+      'x-upsert': 'true',
+    },
+    body: file,
+  });
+  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  return `${SUPABASE_URL}/storage/v1/object/public/client-uploads/${path}`;
+}
+
+document.getElementById('onboard-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const err = document.getElementById('error-msg');
+  btn.disabled = true;
+  btn.textContent = 'Uploading…';
+  err.style.display = 'none';
+
+  try {
+    // Upload logo
+    let logo_url = '';
+    if (logoFiles[0]) {
+      btn.textContent = 'Uploading logo…';
+      const ext = logoFiles[0].name.split('.').pop();
+      logo_url = await uploadToStorage(logoFiles[0], `${token}/logo.${ext}`);
+    }
+
+    // Upload photos
+    const photo_urls = [];
+    for (let i = 0; i < photoFiles.length; i++) {
+      btn.textContent = `Uploading photo ${i+1} of ${photoFiles.length}…`;
+      const ext = photoFiles[i].name.split('.').pop();
+      const url = await uploadToStorage(photoFiles[i], `${token}/photo_${i+1}.${ext}`);
+      photo_urls.push(url);
+    }
+
+    btn.textContent = 'Saving…';
+
+    const colorEl = document.querySelector('input[name="color_preference"]:checked');
+    const payload = {
+      token,
+      business_name:    document.getElementById('business_name').value.trim(),
+      client_name:      document.getElementById('client_name').value.trim(),
+      client_email:     document.getElementById('client_email').value.trim(),
+      phone:            document.getElementById('phone').value.trim(),
+      address:          document.getElementById('address').value.trim(),
+      tagline:          document.getElementById('tagline').value.trim(),
+      about_text:       document.getElementById('about_text').value.trim(),
+      services:         document.getElementById('services').value.trim(),
+      hours:            document.getElementById('hours').value.trim(),
+      color_preference: colorEl ? colorEl.value : '',
+      website_notes:    document.getElementById('website_notes').value.trim(),
+      logo_url,
+      photo_urls,
+      status:           'submitted',
+      submitted_at:     new Date().toISOString(),
+    };
+
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/client_onboarding`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(detail);
+    }
+
+    document.getElementById('form-wrap').style.display = 'none';
+    document.getElementById('success-wrap').style.display = 'block';
+
+  } catch(ex) {
+    err.textContent = 'Something went wrong: ' + ex.message + '. Please email maya@webbymaya.com directly.';
+    err.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Submit My Content →';
+  }
+});
+</script>
+</body>
+</html>

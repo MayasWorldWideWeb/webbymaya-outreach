@@ -95,7 +95,37 @@ REJECT_EMAIL_PATTERNS = [
     # Generic catch-all domains that almost always bounce
     r"@info\.com$", r"@email\.com$", r"@mail\.com$", r"@webmail\.",
     r"@server\.", r"@domain\.", r"@website\.",
+    # Large corporate / national brands — never a local small biz
+    r"@wawa\.com$", r"@alexanderwang\.com$", r"@github\.com$",
+    r"@gannett\.com$", r"@spoton\.com$", r"@vwstores\.com$",
+    r"@mountlaurel\.com$", r"@rittenhousehotel\.com$", r"@sila\.org$",
+    r"@jae\.com$", r"@harvestseasonal\.com$", r"@dolcegabbana\.com$",
+    r"@smalls\.com$", r"@forsythiaphilly\.com$",
 ]
+
+# Personal email providers — always valid for a small biz owner
+_PERSONAL_DOMAINS = {
+    "gmail.com", "yahoo.com", "outlook.com", "hotmail.com",
+    "icloud.com", "me.com", "mac.com", "aol.com", "comcast.net",
+    "verizon.net", "att.net", "msn.com", "live.com", "ymail.com",
+}
+
+
+def _email_belongs_to_biz(email: str, name: str) -> bool:
+    """Return True if the email is plausibly from this business."""
+    domain = email.split("@")[-1].lower().rstrip(".")
+    # Personal emails are always acceptable
+    if domain in _PERSONAL_DOMAINS:
+        return True
+    # Strip TLD(s) to get the brand part of the domain
+    domain_brand = re.sub(r"\.[a-z]{2,6}(\.[a-z]{2})?$", "", domain).lower()
+    # Tokenise business name — words of 5+ chars to avoid short coincidental matches
+    name_words = [w.lower() for w in re.split(r"\W+", name) if len(w) >= 5]
+    # Accept if any name word appears in the domain brand (or vice-versa)
+    for word in name_words:
+        if word in domain_brand or domain_brand in word:
+            return True
+    return False
 
 # Local parts (before @) that are too generic or clearly garbage
 REJECT_LOCAL_PARTS = re.compile(
@@ -204,9 +234,24 @@ def _playwright_fetch(url: str) -> str:
         return ""
 
 
-def find_email_for_business(name: str, city: str) -> str:
-    query = f'"{name}" {city} contact email'
+def find_email_for_business(name: str, city: str, website: str = "") -> str:
+    # ── 0. Try the business's own website first (most reliable) ──────────────
+    if website and website.startswith("http"):
+        for path in ["", "/contact", "/contact-us", "/about"]:
+            html = safe_fetch(website.rstrip("/") + path)
+            if html:
+                soup = BeautifulSoup(html, "html.parser")
+                for tag in soup(["script", "style"]):
+                    tag.decompose()
+                candidates = [
+                    e for e in extract_emails_from_text(soup.get_text(separator=" "))
+                    if _email_belongs_to_biz(e, name)
+                ]
+                if candidates:
+                    return best_email(candidates)
 
+    # ── 1. DuckDuckGo search ──────────────────────────────────────────────────
+    query = f'"{name}" {city} contact email'
     urls = []
     try:
         with DDGS() as ddgs:
@@ -225,22 +270,29 @@ def find_email_for_business(name: str, city: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
         for tag in soup(["script", "style"]):
             tag.decompose()
-        emails = extract_emails_from_text(soup.get_text(separator=" "))
+        emails = [
+            e for e in extract_emails_from_text(soup.get_text(separator=" "))
+            if _email_belongs_to_biz(e, name)
+        ]
         all_emails.extend(emails)
         if all_emails:
             break
 
-    # Playwright fallback — renders JS-heavy pages (React/Vue directories) that requests misses
+    # ── 2. Playwright fallback ────────────────────────────────────────────────
     if not all_emails and _PLAYWRIGHT_OK and urls:
         for url in urls[:2]:
             time.sleep(FETCH_DELAY)
             text = _playwright_fetch(url)
             if text:
-                emails = extract_emails_from_text(text)
+                emails = [
+                    e for e in extract_emails_from_text(text)
+                    if _email_belongs_to_biz(e, name)
+                ]
                 all_emails.extend(emails)
                 if all_emails:
                     break
 
+    # ── 3. Yelp direct URL fallback ───────────────────────────────────────────
     if not all_emails:
         yelp_query = name.lower().replace(" ", "-") + "-" + city.lower().split(",")[0].replace(" ", "-")
         yelp_url = f"https://www.yelp.com/biz/{yelp_query}"
@@ -250,7 +302,11 @@ def find_email_for_business(name: str, city: str) -> str:
             soup = BeautifulSoup(html, "html.parser")
             for tag in soup(["script", "style"]):
                 tag.decompose()
-            all_emails.extend(extract_emails_from_text(soup.get_text(separator=" ")))
+            emails = [
+                e for e in extract_emails_from_text(soup.get_text(separator=" "))
+                if _email_belongs_to_biz(e, name)
+            ]
+            all_emails.extend(emails)
 
     return best_email(all_emails)
 
@@ -336,12 +392,13 @@ def main():
 
     def enrich_one(idx: int):
         row = prospects[idx]
-        name = row.get("name", "").strip()
-        city = row.get("city", row.get("address", "")).strip()
+        name    = row.get("name", "").strip()
+        city    = row.get("city", row.get("address", "")).strip()
+        website = row.get("website", "").strip()
         if not name:
             progress.tick(False)
             return idx, ""
-        email = find_email_for_business(name, city)
+        email = find_email_for_business(name, city, website=website)
         progress.tick(bool(email))
         if args.dry_run and email:
             print(f"    ✓ {name} → {email}")

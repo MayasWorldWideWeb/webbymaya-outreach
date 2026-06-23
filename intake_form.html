@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebByMaya — Let's Build Your Website</title>
+<style>
+  :root {
+    --gold: #C9A96E;
+    --gold-light: #e0c48a;
+    --dark: #0d0d0d;
+    --card: #161616;
+    --border: #2a2a2a;
+    --text: #f0f0f0;
+    --muted: #888;
+    --error: #e05c5c;
+    --success: #5cb85c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--dark);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding: 0 0 80px;
+  }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #111 0%, #1a1505 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 32px 24px;
+    text-align: center;
+  }
+  .logo { font-size: 13px; letter-spacing: 4px; color: var(--gold); text-transform: uppercase; margin-bottom: 12px; }
+  .header h1 { font-size: clamp(24px, 5vw, 36px); font-weight: 800; line-height: 1.2; }
+  .header h1 span { color: var(--gold); }
+  .header p { color: var(--muted); margin-top: 10px; font-size: 15px; max-width: 520px; margin-left: auto; margin-right: auto; }
+
+  /* Progress */
+  .progress-wrap {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .progress-bar-bg {
+    background: var(--border);
+    border-radius: 99px;
+    height: 4px;
+    max-width: 700px;
+    margin: 0 auto 8px;
+  }
+  .progress-bar-fill {
+    background: var(--gold);
+    height: 4px;
+    border-radius: 99px;
+    transition: width 0.4s ease;
+    width: 10%;
+  }
+  .progress-label {
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* Steps */
+  .steps { max-width: 700px; margin: 0 auto; padding: 0 16px; }
+  .step { display: none; padding-top: 40px; }
+  .step.active { display: block; }
+
+  .step-badge {
+    display: inline-block;
+    background: rgba(201,169,110,0.15);
+    color: var(--gold);
+    border: 1px solid rgba(201,169,110,0.3);
+    border-radius: 99px;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 14px;
+    margin-bottom: 16px;
+  }
+  .step h2 { font-size: clamp(20px, 4vw, 28px); font-weight: 800; margin-bottom: 8px; }
+  .step h2 span { color: var(--gold); }
+  .step > p { color: var(--muted); font-size: 14px; margin-bottom: 32px; line-height: 1.6; }
+
+  /* Fields */
+  .field { margin-bottom: 28px; }
+  .field label {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+  .field label .req { color: var(--gold); margin-left: 3px; }
+  .field .hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; line-height: 1.5; }
+
+  input[type="text"],
+  input[type="email"],
+  input[type="tel"],
+  input[type="url"],
+  textarea,
+  select {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 15px;
+    padding: 14px 16px;
+    transition: border-color 0.2s;
+    font-family: inherit;
+    resize: vertical;
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: var(--gold);
+  }
+  input::placeholder, textarea::placeholder { color: #444; }
+  textarea { min-height: 100px; }
+
+  /* Radio/Checkbox grid */
+  .radio-grid, .check-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+  }
+  .radio-grid.wide, .check-grid.wide {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+  .choice-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    font-size: 14px;
+  }
+  .choice-label:hover { border-color: var(--gold); }
+  .choice-label input { display: none; }
+  .choice-label .dot {
+    width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .choice-label .box {
+    width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-radius: 5px;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .choice-label input:checked ~ .dot,
+  .choice-label input:checked ~ .box {
+    border-color: var(--gold);
+    background: var(--gold);
+  }
+  .choice-label input:checked ~ .dot::after { content: ''; width: 6px; height: 6px; background: #000; border-radius: 50%; }
+  .choice-label input:checked ~ .box::after { content: '✓'; font-size: 11px; color: #000; font-weight: 900; }
+  .choice-label:has(input:checked) { border-color: var(--gold); background: rgba(201,169,110,0.07); }
+
+  /* Color swatches */
+  .swatch-wrap { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .swatch {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 3px solid transparent;
+    cursor: pointer;
+    transition: transform 0.15s, border-color 0.15s;
+  }
+  .swatch:hover { transform: scale(1.15); }
+  .swatch.selected { border-color: #fff; transform: scale(1.15); }
+
+  /* Vibe pills */
+  .vibe-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+  .vibe-pill {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 8px 18px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+  }
+  .vibe-pill:hover { border-color: var(--gold); }
+  .vibe-pill.selected { background: var(--gold); border-color: var(--gold); color: #000; font-weight: 700; }
+
+  /* Tone cards */
+  .tone-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 500px) { .tone-grid { grid-template-columns: 1fr; } }
+  .tone-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .tone-card:hover { border-color: var(--gold); }
+  .tone-card.selected { border-color: var(--gold); background: rgba(201,169,110,0.08); }
+  .tone-card .tone-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+  .tone-card .tone-example { font-size: 12px; color: var(--muted); font-style: italic; }
+  .tone-card input { display: none; }
+
+  /* Upload note */
+  .upload-note {
+    background: rgba(201,169,110,0.08);
+    border: 1px dashed rgba(201,169,110,0.4);
+    border-radius: 10px;
+    padding: 16px;
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .upload-note strong { color: var(--gold); }
+
+  /* Divider */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  /* Nav buttons */
+  .nav { display: flex; gap: 12px; padding-top: 32px; }
+  .btn-back {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 14px 24px;
+    transition: border-color 0.2s;
+  }
+  .btn-back:hover { border-color: var(--muted); }
+  .btn-next, .btn-submit {
+    flex: 1;
+    background: var(--gold);
+    border: none;
+    border-radius: 10px;
+    color: #000;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 800;
+    padding: 14px 24px;
+    transition: background 0.2s, transform 0.1s;
+    letter-spacing: 0.5px;
+  }
+  .btn-next:hover, .btn-submit:hover { background: var(--gold-light); }
+  .btn-next:active, .btn-submit:active { transform: scale(0.98); }
+
+  /* Success screen */
+  #success {
+    display: none;
+    text-align: center;
+    padding: 80px 24px;
+    max-width: 500px;
+    margin: 0 auto;
+  }
+  .success-icon { font-size: 64px; margin-bottom: 24px; }
+  #success h2 { font-size: 28px; font-weight: 800; margin-bottom: 12px; }
+  #success h2 span { color: var(--gold); }
+  #success p { color: var(--muted); line-height: 1.7; font-size: 15px; }
+
+  /* Error msg */
+  .err-msg { color: var(--error); font-size: 13px; margin-top: 6px; display: none; }
+
+  /* Two-col */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 480px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">WebByMaya</div>
+  <h1>Let's Build Your <span>Dream Website</span></h1>
+  <p>This form takes about 10–15 minutes. Be as detailed as you want — the more you share, the better I can bring your vision to life. No calls needed! 🙌</p>
+</div>
+
+<div class="progress-wrap">
+  <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressBar"></div></div>
+  <div class="progress-label" id="progressLabel">Step 1 of 9</div>
+</div>
+
+<div class="steps" id="stepsWrap">
+
+  <!-- ── STEP 1: Contact ─────────────────────────────────────── -->
+  <div class="step active" data-step="1">
+    <div class="step-badge">Let's start</div>
+    <h2>Hey! Nice to meet you 👋<br>I'm <span>Maya</span>.</h2>
+    <p>Super excited to work together. First — who am I building this site for?</p>
+
+    <div class="field">
+      <label>Your full name <span class="req">*</span></label>
+      <input type="text" id="contact_name" placeholder="e.g. Jordan Smith" required>
+    </div>
+    <div class="field">
+      <label>Business name <span class="req">*</span></label>
+      <input type="text" id="business_name" placeholder="e.g. Jordan's Nail Studio" required>
+    </div>
+    <div class="two-col">
+      <div class="field">
+        <label>Your email <span class="req">*</span></label>
+        <input type="email" id="contact_email" placeholder="you@example.com" required>
+      </div>
+      <div class="field">
+        <label>Your phone number</label>
+        <input type="tel" id="contact_phone" placeholder="(215) 555-0000">
+      </div>
+    </div>
+    <div class="field">
+      <label>Best way to reach you for quick questions?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="best_contact" value="Email"><span class="dot"></span>Email</label>
+        <label class="choice-label"><input type="radio" name="best_contact" value="Text/SMS"><span class="dot"></span>Text / SMS</label>
+        <label class="choice-label"><input type="radio" name="best_contact" value="Instagram DM"><span class="dot"></span>Instagram DM</label>
+        <label class="choice-label"><input type="radio" name="best_contact" value="Prefer not to say"><span class="dot"></span>No preference</label>
+      </div>
+    </div>
+
+    <div class="nav"><button class="btn-next" onclick="nextStep()">Let's go →</button></div>
+  </div>
+
+  <!-- ── STEP 2: About the business ─────────────────────────── -->
+  <div class="step" data-step="2">
+    <div class="step-badge">Section 1 of 8</div>
+    <h2>Tell me about <span>your business</span></h2>
+    <p>Pretend you're texting a friend about what you do. Keep it real — no corporate speak needed!</p>
+
+    <div class="field">
+      <label>What does your business do? <span class="req">*</span></label>
+      <div class="hint">In 2–4 sentences, describe what you offer. Who do you help and how?</div>
+      <textarea id="what_you_do" placeholder="e.g. I do custom press-on nail sets for women in Philly. I specialize in nail art and gel sets, and I do appointments out of my home studio in South Philly..." required></textarea>
+    </div>
+    <div class="field">
+      <label>What makes you different from the competition?</label>
+      <div class="hint">What do clients get from you that they can't get anywhere else?</div>
+      <textarea id="what_makes_different" placeholder="e.g. I use only non-toxic products, my sets last 4+ weeks, and I always match the vibe they're going for..."></textarea>
+    </div>
+    <div class="two-col">
+      <div class="field">
+        <label>How long have you been in business?</label>
+        <input type="text" id="years_in_business" placeholder="e.g. 3 years">
+      </div>
+      <div class="field">
+        <label>Business hours</label>
+        <input type="text" id="business_hours" placeholder="e.g. Tue–Sat, 10am–7pm">
+      </div>
+    </div>
+    <div class="field">
+      <label>Business address (or service area if mobile)</label>
+      <input type="text" id="business_address" placeholder="e.g. 1234 South St, Philadelphia PA — or 'All of South Philly'">
+    </div>
+    <div class="two-col">
+      <div class="field">
+        <label>Phone number to show on the website</label>
+        <input type="tel" id="website_phone" placeholder="(215) 555-0000">
+      </div>
+      <div class="field">
+        <label>Email to show on the website</label>
+        <input type="email" id="website_email" placeholder="bookings@yourbusiness.com">
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-next" onclick="nextStep()">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 3: Your Customers ──────────────────────────────── -->
+  <div class="step" data-step="3">
+    <div class="step-badge">Section 2 of 8</div>
+    <h2>Who are your <span>dream customers?</span></h2>
+    <p>The more I understand your people, the better I can write copy that speaks directly to them.</p>
+
+    <div class="field">
+      <label>Describe your ideal customer <span class="req">*</span></label>
+      <div class="hint">Age range, where they live, their lifestyle, what they care about — whatever feels relevant.</div>
+      <textarea id="ideal_customer" placeholder="e.g. Women 25–45 in South Philly who want to look polished but hate the typical nail salon experience. They care about quality and aesthetics..." required></textarea>
+    </div>
+    <div class="field">
+      <label>What problem do you solve for them?</label>
+      <div class="hint">What's frustrating their life before they find you?</div>
+      <textarea id="problem_solved" placeholder="e.g. They're tired of paying $80 at a salon and having their nails chip in a week. I give them a longer-lasting, more personal experience..."></textarea>
+    </div>
+    <div class="field">
+      <label>What do happy customers compliment you on most?</label>
+      <div class="hint">Think about your 5-star reviews — what do people always say?</div>
+      <textarea id="top_compliment" placeholder="e.g. They always say I really listen to what they want, and that my sets last way longer than expected..."></textarea>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-next" onclick="nextStep()">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 4: Services ────────────────────────────────────── -->
+  <div class="step" data-step="4">
+    <div class="step-badge">Section 3 of 8</div>
+    <h2>What do you <span>offer?</span></h2>
+    <p>I'll use this to build out your services section. Don't worry about perfect wording — I'll polish the copy.</p>
+
+    <div class="field">
+      <label>List your main services or products <span class="req">*</span></label>
+      <div class="hint">One per line. Include name, short description, and price if you're comfortable sharing it.</div>
+      <textarea id="services_list" style="min-height:160px" placeholder="Full Set — custom gel nail set with any design, $75&#10;Fill-ins — maintenance appointment, $45&#10;Nail art add-on — per nail, $5–$15&#10;Press-on sets — custom, shipped anywhere, $55" required></textarea>
+    </div>
+    <div class="field">
+      <label>Do you offer packages, bundles, or memberships?</label>
+      <textarea id="has_packages" placeholder="e.g. Monthly fill-in package: 2 appointments for $80. Or no, I just do individual services..."></textarea>
+    </div>
+    <div class="field">
+      <label>Do you take appointments / bookings?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="takes_bookings" value="Yes — I use a booking system"><span class="dot"></span>Yes, I use a booking system</label>
+        <label class="choice-label"><input type="radio" name="takes_bookings" value="Yes — via text or DM"><span class="dot"></span>Yes, via text or DM</label>
+        <label class="choice-label"><input type="radio" name="takes_bookings" value="Walk-ins only"><span class="dot"></span>Walk-ins only</label>
+        <label class="choice-label"><input type="radio" name="takes_bookings" value="No appointments needed"><span class="dot"></span>No appointments</label>
+      </div>
+      <input type="text" id="booking_system" placeholder="If yes — which system? (e.g. Vagaro, Square, Booksy, Calendly...)" style="margin-top:12px">
+    </div>
+    <div class="field">
+      <label>Do you sell products online or ship anything?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="sells_online" value="Yes"><span class="dot"></span>Yes</label>
+        <label class="choice-label"><input type="radio" name="sells_online" value="No"><span class="dot"></span>No</label>
+        <label class="choice-label"><input type="radio" name="sells_online" value="Want to in the future"><span class="dot"></span>Want to in the future</label>
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-next" onclick="nextStep()">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 5: Pages ──────────────────────────────────────── -->
+  <div class="step" data-step="5">
+    <div class="step-badge">Section 4 of 8</div>
+    <h2>What pages does your <span>site need?</span></h2>
+    <p>Check everything that applies. Not sure? Check it anyway — we can always trim it down.</p>
+
+    <div class="field">
+      <label>Pages to include <span class="req">*</span></label>
+      <div class="check-grid wide">
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Home"><span class="box"></span>Home</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="About Me / Our Story"><span class="box"></span>About Me / Our Story</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Services / Menu"><span class="box"></span>Services / Menu</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Gallery / Portfolio"><span class="box"></span>Gallery / Portfolio</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Testimonials / Reviews"><span class="box"></span>Testimonials / Reviews</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Online Booking"><span class="box"></span>Online Booking</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Online Shop / Products"><span class="box"></span>Online Shop</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Blog / Tips"><span class="box"></span>Blog / Tips</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="FAQ"><span class="box"></span>FAQ</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Contact"><span class="box"></span>Contact</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Pricing"><span class="box"></span>Pricing page</label>
+        <label class="choice-label"><input type="checkbox" name="pages_needed" value="Team / Staff"><span class="box"></span>Team / Staff</label>
+      </div>
+    </div>
+    <div class="field">
+      <label>Any pages not listed above?</label>
+      <input type="text" id="pages_other" placeholder="e.g. Event calendar, press kit, client portal...">
+    </div>
+    <div class="field">
+      <label>Do you need online payments on the site?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="needs_payments" value="Yes"><span class="dot"></span>Yes</label>
+        <label class="choice-label"><input type="radio" name="needs_payments" value="No"><span class="dot"></span>No</label>
+        <label class="choice-label"><input type="radio" name="needs_payments" value="Maybe later"><span class="dot"></span>Maybe later</label>
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-next" onclick="nextStep()">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 6: Look & Feel ────────────────────────────────── -->
+  <div class="step" data-step="6">
+    <div class="step-badge">Section 5 of 8</div>
+    <h2>The <span>look & feel</span></h2>
+    <p>This is where the fun starts. I want your site to feel immediately like <em>you</em>.</p>
+
+    <div class="field">
+      <label>Pick up to 5 words that describe your vibe <span class="req">*</span></label>
+      <div class="hint">Click to select. These 5 words become the design brief.</div>
+      <div class="vibe-wrap" id="vibeWrap">
+        <div class="vibe-pill" data-val="Luxurious">Luxurious</div>
+        <div class="vibe-pill" data-val="Bold">Bold</div>
+        <div class="vibe-pill" data-val="Minimal">Minimal</div>
+        <div class="vibe-pill" data-val="Playful">Playful</div>
+        <div class="vibe-pill" data-val="Elegant">Elegant</div>
+        <div class="vibe-pill" data-val="Edgy">Edgy</div>
+        <div class="vibe-pill" data-val="Warm">Warm</div>
+        <div class="vibe-pill" data-val="Professional">Professional</div>
+        <div class="vibe-pill" data-val="Friendly">Friendly</div>
+        <div class="vibe-pill" data-val="Clean">Clean</div>
+        <div class="vibe-pill" data-val="Moody">Moody</div>
+        <div class="vibe-pill" data-val="Trendy">Trendy</div>
+        <div class="vibe-pill" data-val="Classic">Classic</div>
+        <div class="vibe-pill" data-val="Cozy">Cozy</div>
+        <div class="vibe-pill" data-val="High-end">High-end</div>
+        <div class="vibe-pill" data-val="Fun">Fun</div>
+        <div class="vibe-pill" data-val="Trustworthy">Trustworthy</div>
+        <div class="vibe-pill" data-val="Romantic">Romantic</div>
+        <div class="vibe-pill" data-val="Urban">Urban</div>
+        <div class="vibe-pill" data-val="Natural / Earthy">Natural / Earthy</div>
+      </div>
+      <input type="text" placeholder="Or type your own vibe words here..." id="vibe_custom" style="margin-top:12px">
+    </div>
+
+    <div class="field">
+      <label>Colors you love for your brand</label>
+      <div class="hint">Click any that speak to you, then add specific colors below if you have them.</div>
+      <div class="swatch-wrap" id="swatchWrap">
+        <div class="swatch" data-color="Black" style="background:#111;border-color:#333" title="Black"></div>
+        <div class="swatch" data-color="White / Cream" style="background:#f5f0e8" title="White / Cream"></div>
+        <div class="swatch" data-color="Gold" style="background:#C9A96E" title="Gold"></div>
+        <div class="swatch" data-color="Rose Gold" style="background:#b5737a" title="Rose Gold"></div>
+        <div class="swatch" data-color="Blush Pink" style="background:#f2a8b0" title="Blush Pink"></div>
+        <div class="swatch" data-color="Hot Pink" style="background:#e91e8c" title="Hot Pink"></div>
+        <div class="swatch" data-color="Lavender" style="background:#b39ddb" title="Lavender"></div>
+        <div class="swatch" data-color="Deep Purple" style="background:#4a148c" title="Deep Purple"></div>
+        <div class="swatch" data-color="Navy Blue" style="background:#1a237e" title="Navy Blue"></div>
+        <div class="swatch" data-color="Sky Blue" style="background:#64b5f6" title="Sky Blue"></div>
+        <div class="swatch" data-color="Emerald Green" style="background:#1b5e20" title="Emerald Green"></div>
+        <div class="swatch" data-color="Sage Green" style="background:#8faf8c" title="Sage Green"></div>
+        <div class="swatch" data-color="Rust / Terracotta" style="background:#b5451b" title="Rust / Terracotta"></div>
+        <div class="swatch" data-color="Warm Red" style="background:#c62828" title="Warm Red"></div>
+        <div class="swatch" data-color="Chocolate Brown" style="background:#4e342e" title="Chocolate Brown"></div>
+        <div class="swatch" data-color="Tan / Beige" style="background:#d7c4a3" title="Tan / Beige"></div>
+        <div class="swatch" data-color="Orange" style="background:#e65100" title="Orange"></div>
+        <div class="swatch" data-color="Yellow / Mustard" style="background:#f9a825" title="Yellow / Mustard"></div>
+      </div>
+      <input type="text" id="colors_love" placeholder="Any specific hex codes or color names? (e.g. dusty mauve, #8B7355...)" style="margin-top:14px">
+    </div>
+
+    <div class="field">
+      <label>Colors you absolutely do NOT want</label>
+      <input type="text" id="colors_avoid" placeholder="e.g. neon green, orange, anything too corporate...">
+    </div>
+
+    <div class="field">
+      <label>Paste links to 2–3 websites you love the look of</label>
+      <div class="hint">Doesn't have to be in your industry. Just sites where you thought "yes, this vibe."</div>
+      <textarea id="sites_like" placeholder="https://example.com — I love the dark background and gold accents&#10;https://another.com — the layout feels super clean and modern"></textarea>
+    </div>
+
+    <div class="field">
+      <label>Any sites you really don't like? (optional)</label>
+      <textarea id="sites_dislike" placeholder="https://... — too busy, too many colors, feels cheap..."></textarea>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-next" onclick="nextStep()">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 7: Brand Assets ───────────────────────────────── -->
+  <div class="step" data-step="7">
+    <div class="step-badge">Section 6 of 8</div>
+    <h2>Your <span>brand assets</span></h2>
+    <p>Whatever you have, we'll use. Whatever you don't, I'll work around or help you figure out.</p>
+
+    <div class="field">
+      <label>Do you have a logo?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="has_logo" value="Yes — I love it"><span class="dot"></span>Yes and I love it</label>
+        <label class="choice-label"><input type="radio" name="has_logo" value="Yes — but I'm open to updating"><span class="dot"></span>Yes but open to updating</label>
+        <label class="choice-label"><input type="radio" name="has_logo" value="No logo yet"><span class="dot"></span>No logo yet</label>
+        <label class="choice-label"><input type="radio" name="has_logo" value="Just text / my business name"><span class="dot"></span>Just text / my name</label>
+      </div>
+      <div class="upload-note" style="margin-top:12px">
+        <strong>📎 How to send your logo:</strong> After you submit this form, email it to <strong>mayas.worldwide.web@gmail.com</strong> — any format works (PNG, JPG, PDF, SVG).
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Do you have existing brand colors?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="has_brand_colors" value="Yes — specific hex codes"><span class="dot"></span>Yes, specific hex codes</label>
+        <label class="choice-label"><input type="radio" name="has_brand_colors" value="Sort of — general colors"><span class="dot"></span>Sort of, general colors</label>
+        <label class="choice-label"><input type="radio" name="has_brand_colors" value="No — starting fresh"><span class="dot"></span>No, starting fresh</label>
+      </div>
+      <input type="text" id="brand_colors" placeholder="If yes — paste your hex codes here (e.g. #C9A96E, #0d0d0d)" style="margin-top:12px">
+    </div>
+
+    <div class="field">
+      <label>Do you have photos to use on the website?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="has_photos" value="Yes — professional photos"><span class="dot"></span>Yes, professional photos</label>
+        <label class="choice-label"><input type="radio" name="has_photos" value="Yes — phone photos"><span class="dot"></span>Yes, phone photos</label>
+        <label class="choice-label"><input type="radio" name="has_photos" value="Some — need more"><span class="dot"></span>Some but need more</label>
+        <label class="choice-label"><input type="radio" name="has_photos" value="No photos yet"><span class="dot"></span>No photos yet</label>
+      </div>
+      <input type="text" id="photo_count" placeholder="Roughly how many do you have? (e.g. 20 work pics, 5 headshots...)" style="margin-top:12px">
+      <div class="upload-note" style="margin-top:12px">
+        <strong>📷 How to send photos:</strong> Email or Google Drive link to <strong>mayas.worldwide.web@gmail.com</strong>. More is always better!
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Do you have a tagline or slogan?</label>
+      <input type="text" id="tagline" placeholder="e.g. 'Your nails, elevated.' — or leave blank if you want help creating one">
+    </div>
+
+    <div class="field">
+      <label>Your social media handles</label>
+      <div class="hint">I'll add follow buttons to your site. Leave blank for any you don't use.</div>
+      <textarea id="social_handles" placeholder="Instagram: @yourbusiness&#10;TikTok: @yourbusiness&#10;Facebook: facebook.com/yourbusiness&#10;YouTube, LinkedIn, etc."></textarea>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-next" onclick="nextStep()">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 8: Voice & Copy ───────────────────────────────── -->
+  <div class="step" data-step="8">
+    <div class="step-badge">Section 7 of 8</div>
+    <h2>Your <span>voice & copy</span></h2>
+    <p>This is where I make your website sound like you — not a corporate template. Take your time here.</p>
+
+    <div class="field">
+      <label>How should your website sound? <span class="req">*</span></label>
+      <div class="hint">Pick the one that feels most like you. I'll write all the copy to match.</div>
+      <div class="tone-grid" id="toneGrid">
+        <label class="tone-card">
+          <input type="radio" name="tone" value="Warm & Personal">
+          <div class="tone-title">💛 Warm & Personal</div>
+          <div class="tone-example">"Hey love, I'm so glad you found me. I've been doing nails for 6 years and I pour my heart into every set..."</div>
+        </label>
+        <label class="tone-card">
+          <input type="radio" name="tone" value="Professional & Polished">
+          <div class="tone-title">💼 Professional & Polished</div>
+          <div class="tone-example">"Welcome to [Business]. We specialize in delivering exceptional results for clients who value quality..."</div>
+        </label>
+        <label class="tone-card">
+          <input type="radio" name="tone" value="Bold & Confident">
+          <div class="tone-title">🔥 Bold & Confident</div>
+          <div class="tone-example">"No mediocre sets. No wasted appointments. Just the best nails in Philly — period."</div>
+        </label>
+        <label class="tone-card">
+          <input type="radio" name="tone" value="Fun & Playful">
+          <div class="tone-title">✨ Fun & Playful</div>
+          <div class="tone-example">"We take nails seriously (but never ourselves). Come hang, get gorgeous, leave obsessed."</div>
+        </label>
+        <label class="tone-card">
+          <input type="radio" name="tone" value="Luxurious & High-end">
+          <div class="tone-title">💎 Luxurious & High-end</div>
+          <div class="tone-example">"An elevated experience designed for those who refuse to compromise. Refined. Intentional. Unforgettable."</div>
+        </label>
+        <label class="tone-card">
+          <input type="radio" name="tone" value="Minimal & Straight to the Point">
+          <div class="tone-title">🤍 Minimal & Direct</div>
+          <div class="tone-example">"Great nails. Fair prices. Appointments available now. That's it."</div>
+        </label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Is there anything specific you want said on the website?</label>
+      <div class="hint">Specific phrases, key messages, things you always say to clients, prices you want front and center — anything.</div>
+      <textarea id="must_say" placeholder="e.g. I always want it mentioned that I've been featured in Philly Mag. And I want 'book online, no calls needed' front and center..."></textarea>
+    </div>
+
+    <div class="field">
+      <label>Anything you absolutely do NOT want on the site?</label>
+      <div class="hint">Clichés you hate, phrases that feel off-brand, topics to avoid entirely.</div>
+      <textarea id="must_not_say" placeholder="e.g. Don't use 'luxury' — it feels overused. Don't say 'affordable' — I'm not trying to compete on price..."></textarea>
+    </div>
+
+    <div class="field">
+      <label>Do you have any testimonials or reviews I can use?</label>
+      <div class="hint">Paste them here or tell me where to find them (e.g. Google, Yelp, your IG comments).</div>
+      <textarea id="testimonials" placeholder="e.g. 'Maya is INCREDIBLE. My nails have never lasted this long.' — @clientname on IG&#10;&#10;Or: Check my Google reviews at [link]"></textarea>
+    </div>
+
+    <div class="field">
+      <label>Will you write your own website copy or do you want me to write it for you?</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="writes_own_copy" value="Write it for me — use my answers above"><span class="dot"></span>Write it for me (use my answers)</label>
+        <label class="choice-label"><input type="radio" name="writes_own_copy" value="I'll write it and send it to you"><span class="dot"></span>I'll write it and send it</label>
+        <label class="choice-label"><input type="radio" name="writes_own_copy" value="Mixture — write some, I'll fill in the rest"><span class="dot"></span>Mixture — write a draft, I'll edit</label>
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-next" onclick="nextStep()">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 9: Technical + Final ─────────────────────────── -->
+  <div class="step" data-step="9">
+    <div class="step-badge">Last section</div>
+    <h2>Almost done — <span>a few quick things</span></h2>
+    <p>Nearly there! Just a few technical details and then you're finished. 🎉</p>
+
+    <div class="field">
+      <label>Do you already have a domain name? (e.g. mybusiness.com)</label>
+      <div class="radio-grid">
+        <label class="choice-label"><input type="radio" name="has_domain" value="Yes"><span class="dot"></span>Yes, I have one</label>
+        <label class="choice-label"><input type="radio" name="has_domain" value="No — help me get one"><span class="dot"></span>No, help me get one</label>
+        <label class="choice-label"><input type="radio" name="has_domain" value="Not sure"><span class="dot"></span>Not sure</label>
+      </div>
+      <input type="text" id="domain_name" placeholder="If yes — what is it? (e.g. jordansnailstudio.com)" style="margin-top:12px">
+    </div>
+
+    <div class="field">
+      <label>How soon do you want the site live?</label>
+      <div class="radio-grid wide">
+        <label class="choice-label"><input type="radio" name="timeline" value="ASAP — within 2 weeks"><span class="dot"></span>ASAP — within 2 weeks</label>
+        <label class="choice-label"><input type="radio" name="timeline" value="3–4 weeks is fine"><span class="dot"></span>3–4 weeks is fine</label>
+        <label class="choice-label"><input type="radio" name="timeline" value="No rush — whenever it's ready"><span class="dot"></span>No rush — whenever it's ready</label>
+        <label class="choice-label"><input type="radio" name="timeline" value="I have a specific date"><span class="dot"></span>I have a specific date</label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Anything else you want me to know?</label>
+      <div class="hint">Anything that didn't fit above. Special requests, ideas you have, things you're nervous about, questions for me — go for it.</div>
+      <textarea id="anything_else" style="min-height:120px" placeholder="e.g. I'm hoping to eventually add an online shop. I also want the site to feel different from every other nail salon site out there — no pink flowers, no stock photos of random hands..."></textarea>
+    </div>
+
+    <div class="nav">
+      <button class="btn-back" onclick="prevStep()">← Back</button>
+      <button class="btn-submit" onclick="submitForm()">Submit & Let's Build! 🚀</button>
+    </div>
+    <p id="submitError" style="color:var(--error);text-align:center;margin-top:12px;display:none"></p>
+  </div>
+
+</div>
+
+<!-- ── Success Screen ────────────────────────────────────────── -->
+<div id="success">
+  <div class="success-icon">🎉</div>
+  <h2>You're all set, <span id="successName">friend</span>!</h2>
+  <p>I got everything I need to start building your site.<br><br>
+  I'll review your answers and reach out within <strong style="color:var(--gold)">1–2 business days</strong> to confirm a few things and share your first draft.<br><br>
+  In the meantime — if you have a logo or photos, send them to:<br>
+  <strong style="color:var(--gold)">mayas.worldwide.web@gmail.com</strong><br><br>
+  Talk soon! 💛<br>— Maya</p>
+</div>
+
+<script>
+  const SUPABASE_URL  = "https://ycsauzlqsjjbusugshpz.supabase.co";
+  const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5NTAzOTMxNH0._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI";
+  const BREVO_KEY     = "";  // set via server-side env — do not hardcode
+  const MAYA_EMAIL    = "mayas.worldwide.web@gmail.com";
+
+  let currentStep = 1;
+  const totalSteps = 9;
+  const selectedVibes = [];
+  const selectedColors = [];
+
+  // ── Vibe pills ──────────────────────────────────────────────
+  document.querySelectorAll('.vibe-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      const val = pill.dataset.val;
+      const idx = selectedVibes.indexOf(val);
+      if (idx > -1) {
+        selectedVibes.splice(idx, 1);
+        pill.classList.remove('selected');
+      } else if (selectedVibes.length < 5) {
+        selectedVibes.push(val);
+        pill.classList.add('selected');
+      }
+    });
+  });
+
+  // ── Color swatches ──────────────────────────────────────────
+  document.querySelectorAll('.swatch').forEach(s => {
+    s.addEventListener('click', () => {
+      const val = s.dataset.color;
+      const idx = selectedColors.indexOf(val);
+      if (idx > -1) { selectedColors.splice(idx, 1); s.classList.remove('selected'); }
+      else { selectedColors.push(val); s.classList.add('selected'); }
+    });
+  });
+
+  // ── Tone cards ──────────────────────────────────────────────
+  document.querySelectorAll('.tone-card').forEach(card => {
+    card.addEventListener('click', () => {
+      document.querySelectorAll('.tone-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      card.querySelector('input').checked = true;
+    });
+  });
+
+  // ── Nav ─────────────────────────────────────────────────────
+  function nextStep() {
+    if (!validateStep()) return;
+    if (currentStep < totalSteps) {
+      document.querySelector(`.step[data-step="${currentStep}"]`).classList.remove('active');
+      currentStep++;
+      document.querySelector(`.step[data-step="${currentStep}"]`).classList.add('active');
+      updateProgress();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+  function prevStep() {
+    if (currentStep > 1) {
+      document.querySelector(`.step[data-step="${currentStep}"]`).classList.remove('active');
+      currentStep--;
+      document.querySelector(`.step[data-step="${currentStep}"]`).classList.add('active');
+      updateProgress();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+  function updateProgress() {
+    const pct = Math.round((currentStep / totalSteps) * 100);
+    document.getElementById('progressBar').style.width = pct + '%';
+    document.getElementById('progressLabel').textContent = `Step ${currentStep} of ${totalSteps}`;
+  }
+
+  // ── Validation ──────────────────────────────────────────────
+  function validateStep() {
+    if (currentStep === 1) {
+      if (!v('contact_name') || !v('contact_email') || !v('business_name')) {
+        alert('Please fill in your name, business name, and email before continuing.');
+        return false;
+      }
+    }
+    if (currentStep === 2 && !v('what_you_do')) {
+      alert('Please tell me what your business does before continuing.');
+      return false;
+    }
+    if (currentStep === 3 && !v('ideal_customer')) {
+      alert('Please describe your ideal customer before continuing.');
+      return false;
+    }
+    if (currentStep === 4 && !v('services_list')) {
+      alert('Please list at least one service before continuing.');
+      return false;
+    }
+    return true;
+  }
+
+  function v(id) { return (document.getElementById(id)?.value || '').trim(); }
+
+  function radios(name) {
+    const el = document.querySelector(`input[name="${name}"]:checked`);
+    return el ? el.value : '';
+  }
+
+  function checks(name) {
+    return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(e => e.value);
+  }
+
+  // ── Submit ───────────────────────────────────────────────────
+  async function submitForm() {
+    const btn = document.querySelector('.btn-submit');
+    btn.textContent = 'Sending... ✨';
+    btn.disabled = true;
+
+    const allVibes = [...selectedVibes];
+    const custom = v('vibe_custom');
+    if (custom) allVibes.push(...custom.split(',').map(s => s.trim()).filter(Boolean));
+
+    const allColors = [...selectedColors];
+    const colorInput = v('colors_love');
+
+    const payload = {
+      business_name:      v('business_name'),
+      contact_name:       v('contact_name'),
+      contact_email:      v('contact_email'),
+      contact_phone:      v('contact_phone'),
+      best_contact:       radios('best_contact'),
+      what_you_do:        v('what_you_do'),
+      what_makes_different: v('what_makes_different'),
+      years_in_business:  v('years_in_business'),
+      business_address:   v('business_address'),
+      business_hours:     v('business_hours'),
+      website_email:      v('website_email'),
+      website_phone:      v('website_phone'),
+      ideal_customer:     v('ideal_customer'),
+      problem_solved:     v('problem_solved'),
+      top_compliment:     v('top_compliment'),
+      services_list:      v('services_list'),
+      has_packages:       v('has_packages'),
+      takes_bookings:     radios('takes_bookings'),
+      booking_system:     v('booking_system'),
+      sells_online:       radios('sells_online'),
+      pages_needed:       checks('pages_needed'),
+      pages_other:        v('pages_other'),
+      needs_payments:     radios('needs_payments'),
+      vibe_words:         allVibes,
+      colors_love:        allColors.join(', ') + (colorInput ? ' | ' + colorInput : ''),
+      colors_avoid:       v('colors_avoid'),
+      sites_like:         v('sites_like'),
+      sites_dislike:      v('sites_dislike'),
+      has_logo:           radios('has_logo'),
+      has_brand_colors:   radios('has_brand_colors'),
+      brand_colors:       v('brand_colors'),
+      has_photos:         radios('has_photos'),
+      photo_count:        v('photo_count'),
+      tagline:            v('tagline'),
+      social_handles:     v('social_handles'),
+      tone:               radios('tone'),
+      must_say:           v('must_say'),
+      must_not_say:       v('must_not_say'),
+      testimonials:       v('testimonials'),
+      writes_own_copy:    radios('writes_own_copy'),
+      has_domain:         radios('has_domain'),
+      domain_name:        v('domain_name'),
+      timeline:           radios('timeline'),
+      anything_else:      v('anything_else'),
+    };
+
+    // 1. Save to Supabase
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/intake_responses`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_ANON,
+          'Authorization': `Bearer ${SUPABASE_ANON}`,
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+    } catch(e) {
+      document.getElementById('submitError').textContent = 'Something went wrong saving your response. Please try again or email mayas.worldwide.web@gmail.com directly.';
+      document.getElementById('submitError').style.display = 'block';
+      btn.textContent = 'Submit & Let\'s Build! 🚀';
+      btn.disabled = false;
+      return;
+    }
+
+    // 2. Email Maya via Brevo
+    const emailBody = buildEmailBody(payload);
+    try {
+      await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: { 'api-key': BREVO_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sender: { name: payload.business_name || 'New Intake', email: 'mayas.worldwide.web@gmail.com' },
+          to: [{ email: MAYA_EMAIL, name: 'Maya' }],
+          replyTo: { email: payload.contact_email, name: payload.contact_name },
+          subject: `🔥 New intake form — ${payload.business_name} (${payload.contact_name})`,
+          htmlContent: emailBody
+        })
+      });
+    } catch(e) { /* Supabase already saved it — email is bonus */ }
+
+    // Success
+    document.getElementById('stepsWrap').style.display = 'none';
+    document.querySelector('.progress-wrap').style.display = 'none';
+    document.getElementById('successName').textContent = payload.contact_name.split(' ')[0] || 'friend';
+    document.getElementById('success').style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function buildEmailBody(p) {
+    const row = (label, val) => val ? `<tr><td style="padding:6px 12px 6px 0;color:#888;font-size:13px;white-space:nowrap;vertical-align:top">${label}</td><td style="padding:6px 0;font-size:14px">${String(val).replace(/\n/g,'<br>')}</td></tr>` : '';
+    const section = (title, rows) => `<tr><td colspan="2" style="padding:20px 0 8px"><strong style="color:#C9A96E;font-size:12px;letter-spacing:2px;text-transform:uppercase">${title}</strong></td></tr>${rows}`;
+
+    return `
+<div style="background:#0d0d0d;color:#f0f0f0;font-family:sans-serif;padding:32px;border-radius:12px;max-width:680px">
+  <div style="font-size:22px;font-weight:800;margin-bottom:4px">🔥 New Website Intake</div>
+  <div style="color:#C9A96E;font-size:14px;margin-bottom:24px">${p.business_name} — submitted ${new Date().toLocaleString()}</div>
+  <table style="width:100%;border-collapse:collapse">
+    ${section('Contact', row('Name', p.contact_name) + row('Business', p.business_name) + row('Email', p.contact_email) + row('Phone', p.contact_phone) + row('Best contact', p.best_contact))}
+    ${section('About the Business', row('What they do', p.what_you_do) + row('What makes them different', p.what_makes_different) + row('Years in business', p.years_in_business) + row('Address / area', p.business_address) + row('Hours', p.business_hours) + row('Site phone', p.website_phone) + row('Site email', p.website_email))}
+    ${section('Customers', row('Ideal customer', p.ideal_customer) + row('Problem solved', p.problem_solved) + row('Top compliment', p.top_compliment))}
+    ${section('Services', row('Services list', p.services_list) + row('Packages', p.has_packages) + row('Takes bookings', p.takes_bookings) + row('Booking system', p.booking_system) + row('Sells online', p.sells_online))}
+    ${section('Pages', row('Pages needed', (p.pages_needed||[]).join(', ')) + row('Other pages', p.pages_other) + row('Needs payments', p.needs_payments))}
+    ${section('Look & Feel', row('Vibe words', (p.vibe_words||[]).join(', ')) + row('Colors love', p.colors_love) + row('Colors avoid', p.colors_avoid) + row('Sites they like', p.sites_like) + row('Sites they dislike', p.sites_dislike))}
+    ${section('Brand Assets', row('Logo', p.has_logo) + row('Brand colors', p.has_brand_colors) + row('Color codes', p.brand_colors) + row('Photos', p.has_photos) + row('Photo count', p.photo_count) + row('Tagline', p.tagline) + row('Social handles', p.social_handles))}
+    ${section('Voice & Copy', row('Tone', p.tone) + row('Must say', p.must_say) + row('Must NOT say', p.must_not_say) + row('Testimonials', p.testimonials) + row('Copy writing', p.writes_own_copy))}
+    ${section('Technical + Final', row('Has domain', p.has_domain) + row('Domain name', p.domain_name) + row('Timeline', p.timeline) + row('Anything else', p.anything_else))}
+  </table>
+</div>`;
+  }
+
+  updateProgress();
+</script>
+</body>
+</html>

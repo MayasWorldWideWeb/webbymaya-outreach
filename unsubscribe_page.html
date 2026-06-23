@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unsubscribe — WebByMaya</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#f0ede8;font-family:Arial,Helvetica,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{background:#fff;border-radius:10px;border:1px solid #e4dfd8;max-width:480px;width:100%;overflow:hidden}
+  .bar{background:#C9A96E;height:3px}
+  .brand{padding:20px 32px 0;font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#C9A96E}
+  .body{padding:24px 32px 32px}
+  h1{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:10px}
+  p{font-size:14px;color:#666;line-height:1.7;margin-bottom:20px}
+  input[type=email]{width:100%;padding:12px 14px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#1a1a1a;outline:none;margin-bottom:12px}
+  input[type=email]:focus{border-color:#C9A96E}
+  button{width:100%;padding:13px;background:#1a1a1a;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:700;cursor:pointer}
+  button:hover{background:#333}
+  .done{display:none;text-align:center;padding:8px 0}
+  .done svg{width:48px;height:48px;margin-bottom:12px}
+  .done h2{font-size:18px;font-weight:700;color:#1a1a1a;margin-bottom:8px}
+  .done p{font-size:14px;color:#888;margin:0}
+  .err{display:none;color:#c00;font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="bar"></div>
+  <div class="brand">WebByMaya</div>
+  <div class="body">
+
+    <div id="form-view">
+      <h1>Unsubscribe</h1>
+      <p>Enter your email below and you won't hear from us again.</p>
+      <input type="email" id="email-input" placeholder="your@email.com" autocomplete="email">
+      <button id="btn" onclick="doUnsub()">Unsubscribe me</button>
+      <div class="err" id="err"></div>
+    </div>
+
+    <div class="done" id="done-view">
+      <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="24" cy="24" r="24" fill="#f0ede8"/>
+        <path d="M14 24l7 7 13-13" stroke="#C9A96E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h2>You're unsubscribed.</h2>
+      <p>We've removed your email. You won't receive any more outreach from WebByMaya.</p>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://ycsauzlqsjjbusugshpz.supabase.co";
+const ANON_KEY    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5NTAzOTMxNH0._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI";
+
+// Pre-fill email from URL param
+(function(){
+  const p = new URLSearchParams(window.location.search);
+  const e = p.get("email");
+  if(e) document.getElementById("email-input").value = decodeURIComponent(e);
+})();
+
+async function doUnsub(){
+  const email = document.getElementById("email-input").value.trim().toLowerCase();
+  const err   = document.getElementById("err");
+  err.style.display = "none";
+
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    err.textContent = "Please enter a valid email address.";
+    err.style.display = "block";
+    return;
+  }
+
+  document.getElementById("btn").textContent = "Processing…";
+  document.getElementById("btn").disabled = true;
+
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/unsubscribes`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": ANON_KEY,
+        "Authorization": `Bearer ${ANON_KEY}`,
+        "Prefer": "return=minimal"
+      },
+      body: JSON.stringify({ email })
+    });
+    if(!res.ok) throw new Error(await res.text());
+    document.getElementById("form-view").style.display = "none";
+    document.getElementById("done-view").style.display = "block";
+  } catch(e){
+    document.getElementById("btn").textContent = "Unsubscribe me";
+    document.getElementById("btn").disabled = false;
+    err.textContent = "Something went wrong. Please email maya@webbymaya.com directly.";
+    err.style.display = "block";
+  }
+}
+</script>
+</body>
+</html>

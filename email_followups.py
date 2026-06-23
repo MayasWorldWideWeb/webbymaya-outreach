@@ -89,7 +89,7 @@ Hi {business_name} team,
 
 I won't keep reaching out after this — just wanted to leave the door open.
 
-If a website for {business_name} ever makes sense, I'm here. $799 flat, \
+If a website for {business_name} ever makes sense, I'm here. starting at $499, \
 live in 7 days, no calls needed.
 
 https://webbymaya.com/book
@@ -102,7 +102,7 @@ FOLLOWUP2_HTML = """\
 <p>Hi <strong>{business_name}</strong> team,</p>
 <p>I won't keep reaching out after this — just wanted to leave the door open.</p>
 <p>If a website for <strong>{business_name}</strong> ever makes sense, I'm here.
-<strong>$799 flat, live in 7 days, no calls needed.</strong></p>
+<strong>starting at $499, live in 7 days, no calls needed.</strong></p>
 <p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:10px 20px;text-decoration:none;border-radius:4px;display:inline-block;font-weight:bold">Start here →</a></p>
 <p>— Maya<br>Web Designer · <a href="https://webbymaya.com">WebByMaya.com</a></p>
 </body></html>
@@ -125,7 +125,7 @@ from now — my form stays open:
 
 https://webbymaya.com/book
 
-$799 flat, no monthly fees, live in 7 days.
+starting at $499, no monthly fees, live in 7 days.
 
 Wishing you and your business the best.
 
@@ -141,7 +141,7 @@ FOLLOWUP3_HTML = """\
 out your file and stop following up.</p>
 <p>If the timing was never right, truly no hard feelings.</p>
 <p>But if a website ever makes sense for <strong>{business_name}</strong>, my form
-stays open. <strong style="color:#333">$799 flat &middot; live in 7 days &middot; no calls needed.</strong></p>
+stays open. <strong style="color:#333">starting at $499 · live in 7 days &middot; no calls needed.</strong></p>
 <p style="margin:24px 0">
   <a href="https://webbymaya.com/book"
     style="background:#C9A96E;color:#000;padding:11px 22px;text-decoration:none;

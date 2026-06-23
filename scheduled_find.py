@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 scheduled_find.py — Auto-rotating lead finder for WebByMaya
-Runs find_prospects.py on the next Philly zone, advances the rotation,
-and notifies when all zones are exhausted.
+Runs Yelp + OSM + HERE + BBB + TomTom + Bing on zones in parallel.
 """
 import csv
 import json
+import os
 import subprocess
 import sys
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
@@ -20,6 +21,10 @@ except ImportError:
 SCRIPT_DIR = Path(__file__).parent
 STATE_FILE = SCRIPT_DIR / "zone_state.json"
 
+ZONES_PER_RUN  = 4    # zones per scheduled daily call (overridden to 999 by run_until_stop)
+ZONE_TIMEOUT   = 240  # seconds per Yelp zone before giving up
+PARALLEL_ZONES = 4    # how many zones to scrape simultaneously
+
 
 def load_state():
     return json.loads(STATE_FILE.read_text())
@@ -29,17 +34,36 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-ZONES_PER_RUN = 4   # run this many zones per daily call to hit 600-900 emails/day
+def _run_subprocess(cmd, timeout=None):
+    try:
+        r = subprocess.run(cmd, timeout=timeout)
+        return r.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
 
 
-def run_zone(zone, today):
-    """Run find + OSM/HERE for one zone. Returns list of prospect rows merged."""
-    print(f"\n  → Searching zone: {zone}")
-    cmd = [sys.executable, str(SCRIPT_DIR / "find_prospects_yelp.py"), "--zone", zone]
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        print(f"  [scheduled_find] Yelp failed for zone '{zone}' — continuing.")
-    return result.returncode == 0
+def run_yelp_zone(zone: str, today: str) -> tuple[str, Path, bool]:
+    """Run Yelp for one zone into a per-zone temp file. Returns (zone, csv_path, ok)."""
+    out = SCRIPT_DIR / f"prospects_yelp_{today}_{zone}.csv"
+    print(f"  [Yelp] → {zone}")
+    ok = _run_subprocess(
+        [sys.executable, str(SCRIPT_DIR / "find_prospects_yelp.py"),
+         "--zone", zone, "--output", str(out)],
+        timeout=ZONE_TIMEOUT,
+    )
+    if not ok:
+        print(f"  [Yelp] {zone} timed out or failed — skipping.")
+    return zone, out, ok
+
+
+def run_source_zone(script: str, zone: str, out: Path, timeout: int = 180) -> tuple[str, Path, bool]:
+    ok = _run_subprocess(
+        [sys.executable, str(SCRIPT_DIR / script), "--zone", zone, "--output", str(out)],
+        timeout=timeout,
+    )
+    return zone, out, ok
 
 
 def main():
@@ -61,105 +85,135 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  WebByMaya Scheduled Find — {today}")
-    print(f"  Running {len(batch)} zone(s) this pass: {', '.join(batch)}")
+    print(f"  {len(batch)} zone(s) this pass ({PARALLEL_ZONES} parallel): {', '.join(batch)}")
     print(f"  Zone progress: {idx+1}–{idx+len(batch)} of {len(zones)}")
     print(f"{'='*60}\n")
 
-    # Run each zone; collect all output into today's CSV (zones append to same file)
-    for zone in batch:
-        run_zone(zone, today)
-        state["current_index"] = idx + batch.index(zone) + 1
-        state["completed"].append({"zone": zone, "date": today})
+    # ── 1. Yelp: run all zones in parallel chunks ─────────────────────────────
+    yelp_rows: list[dict] = []
+    seen_phones: set[str] = set()
+    seen_names:  list[str] = []
 
+    # Load any rows already in today's CSV from a previous pass
+    main_csv = SCRIPT_DIR / f"prospects_{today}.csv"
+    if main_csv.exists():
+        with open(main_csv, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                yelp_rows.append(row)
+                ph = row.get("phone","").strip()
+                nm = row.get("name","").strip().lower()
+                if ph: seen_phones.add(ph)
+                if nm: seen_names.append(nm)
+
+    for chunk_start in range(0, len(batch), PARALLEL_ZONES):
+        chunk = batch[chunk_start : chunk_start + PARALLEL_ZONES]
+        with ThreadPoolExecutor(max_workers=len(chunk)) as ex:
+            futures = {ex.submit(run_yelp_zone, z, today): z for z in chunk}
+            for fut in as_completed(futures):
+                zone, csv_path, ok = fut.result()
+                if ok and csv_path.exists():
+                    with open(csv_path, newline="", encoding="utf-8") as f:
+                        for row in csv.DictReader(f):
+                            ph = row.get("phone","").strip()
+                            nm = row.get("name","").strip().lower()
+                            key = ph if ph else nm
+                            if key and key in seen_phones:
+                                continue
+                            if _RF_OK and nm and any(_fuzz.token_set_ratio(nm, n) >= 90 for n in seen_names):
+                                continue
+                            yelp_rows.append(row)
+                            if ph: seen_phones.add(ph)
+                            if nm: seen_names.append(nm)
+                    csv_path.unlink(missing_ok=True)
+
+    # Update state after Yelp pass
+    for zone in batch:
+        state["completed"].append({"zone": zone, "date": today})
+    state["current_index"] = idx + len(batch)
     state["last_find"] = today
     save_state(state)
 
-    yelp_csv = SCRIPT_DIR / f"prospects_{today}.csv"
-    yelp_rows = []
-    if yelp_csv.exists():
-        import os
-        with open(yelp_csv, newline="", encoding="utf-8") as f:
-            yelp_rows = list(csv.DictReader(f))
-
     phones_with_data = sum(1 for r in yelp_rows if r.get("phone","").strip())
-    print(f"\n[scheduled_find] Combined: {len(yelp_rows)} prospects ({phones_with_data} with phones) from {len(batch)} zones.")
+    print(f"\n[scheduled_find] Yelp total: {len(yelp_rows)} prospects ({phones_with_data} with phones)")
 
-    import os
-
-    # ── OSM supplement for each zone run ─────────────────────────────────────
-    seen_phones = {r["phone"].strip() for r in yelp_rows if r.get("phone","").strip()}
-    seen_names  = [r.get("name","").strip().lower() for r in yelp_rows if r.get("name","").strip()]
     merged = list(yelp_rows)
 
-    def merge_source(label, source_csv):
-        nonlocal merged
+    # ── 2. Merge helper ───────────────────────────────────────────────────────
+    def merge_source(label: str, source_csv: Path):
         if not source_csv.exists():
             return
         with open(source_csv, newline="", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         new = []
         for row in rows:
-            phone = row.get("phone","").strip()
-            name  = row.get("name","").strip().lower()
-            key = phone if phone else name
+            ph   = row.get("phone","").strip()
+            nm   = row.get("name","").strip().lower()
+            key  = ph if ph else nm
             if key and key in seen_phones:
                 continue
-            if _RF_OK and name:
-                if any(_fuzz.token_set_ratio(name, n) >= 90 for n in seen_names):
-                    continue
+            if _RF_OK and nm and any(_fuzz.token_set_ratio(nm, n) >= 90 for n in seen_names):
+                continue
             row.setdefault("sms_status","")
             row.setdefault("email_status","")
             new.append(row)
-            if key:   seen_phones.add(key)
-            if name:  seen_names.append(name)
+            if key: seen_phones.add(key)
+            if nm:  seen_names.append(nm)
         if new:
-            print(f"[scheduled_find] {label} added {len(new)} new prospects.")
+            print(f"[scheduled_find] {label} +{len(new)} new prospects")
             merged.extend(new)
         source_csv.unlink(missing_ok=True)
 
-    for zone in batch:
-        osm_csv = SCRIPT_DIR / f"prospects_osm_{today}_{zone}.csv"
-        osm_result = subprocess.run([
-            sys.executable, str(SCRIPT_DIR / "find_prospects_osm.py"),
-            "--zone", zone, "--output", str(osm_csv),
-        ])
-        if osm_result.returncode == 0:
-            merge_source(f"OSM/{zone}", osm_csv)
+    # ── 3. Supplemental sources: run all zones in parallel ────────────────────
+    def parallel_source(script, label_prefix, timeout=180):
+        tasks = []
+        for zone in batch:
+            slug = script.replace("find_prospects_","").replace(".py","")
+            out  = SCRIPT_DIR / f"prospects_{slug}_{today}_{zone}.csv"
+            tasks.append((zone, out))
+        with ThreadPoolExecutor(max_workers=min(PARALLEL_ZONES, len(batch))) as ex:
+            futures = {ex.submit(run_source_zone, script, z, o, timeout): (z, o) for z, o in tasks}
+            for fut in as_completed(futures):
+                zone, out, ok = fut.result()
+                if ok:
+                    merge_source(f"{label_prefix}/{zone}", out)
+
+    parallel_source("find_prospects_osm.py", "OSM", timeout=120)
 
     here_key = os.environ.get("HERE_API_KEY", "")
     if here_key:
-        for zone in batch:
-            here_csv = SCRIPT_DIR / f"prospects_here_{today}_{zone}.csv"
-            here_result = subprocess.run([
-                sys.executable, str(SCRIPT_DIR / "find_prospects_here.py"),
-                "--zone", zone, "--output", str(here_csv),
-            ])
-            if here_result.returncode == 0:
-                merge_source(f"HERE/{zone}", here_csv)
+        parallel_source("find_prospects_here.py", "HERE", timeout=120)
 
-    if len(merged) > len(yelp_rows):
-        all_columns = list(merged[0].keys()) if merged else []
+    tt_key = os.environ.get("TOMTOM_API_KEY", "")
+    if tt_key:
+        parallel_source("find_prospects_tomtom.py", "TomTom", timeout=180)
+
+    bing_key = os.environ.get("BING_MAPS_KEY", "")
+    if bing_key:
+        parallel_source("find_prospects_bing.py", "Bing", timeout=180)
+
+    parallel_source("find_prospects_bbb.py", "BBB", timeout=240)
+
+    # Manta blocks bots (403) — skipping
+    # FSQ free API deprecated 2025 — skipping
+
+    # ── 4. Write merged CSV ───────────────────────────────────────────────────
+    if merged:
+        all_columns = list(merged[0].keys())
         for row in merged[1:]:
             for col in row.keys():
                 if col not in all_columns:
                     all_columns.append(col)
-        yelp_csv = SCRIPT_DIR / f"prospects_{today}.csv"
-        with open(yelp_csv, "w", newline="", encoding="utf-8") as f:
+        with open(main_csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=all_columns, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(merged)
         print(f"\n[scheduled_find] Final merged CSV: {len(merged)} prospects from {len(batch)} zones.")
 
-    state["current_index"] = idx + 1
-    state["completed"].append({"zone": zone, "date": today})
-    state["last_find"] = today
-    save_state(state)
-
-    remaining = len(zones) - (idx + 1)
-    if remaining == 0:
-        print(f"\n*** Last Philly zone searched. Reply to Maya's next check-in to plan suburbs. ***")
+    remaining = len(zones) - (idx + len(batch))
+    if remaining <= 0:
+        print(f"\n*** All zones done — next pass will reset. ***")
     else:
-        print(f"\nZone '{zone}' done. Next zone: {zones[idx+1]}  ({remaining} remaining)")
+        print(f"\nNext zone: {zones[idx + len(batch)]}  ({remaining} remaining)")
 
 
 if __name__ == "__main__":

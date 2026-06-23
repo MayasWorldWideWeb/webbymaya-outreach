@@ -21,6 +21,7 @@ import datetime
 import email.mime.multipart
 import email.mime.text
 import json
+import re
 import os
 import sys
 import time
@@ -28,6 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import timezone, timedelta
+from batch_send_outreach import html_card, _ep, _ecta
 from pathlib import Path
 
 SCRIPT_DIR       = Path(__file__).parent
@@ -36,84 +38,68 @@ SENDER_NAME      = "Maya Sierra"
 SG               = os.environ.get("SENDGRID_API_KEY", "")
 GMAIL_TOKEN_PATH = Path.home() / ".webbymaaya/gmail_token.json"
 DEFAULT_LIMIT    = 20
-MIN_HOURS        = 48
+MIN_HOURS        = 4
 MAX_DAYS         = 14
 SEND_DELAY_SEC   = 20
 
-# Subject when a mockup was successfully pre-built
-SUBJECT_MOCKUP = "I already built a free website preview for you, {name}"
-# Fallback subject when no mockup
-SUBJECT_PLAIN  = "Quick follow-up, {name}"
+# Subject lines — more specific, acknowledge they actually viewed the preview
+SUBJECT_MOCKUP = "You viewed the {name} preview — a few thoughts"
+SUBJECT_PLAIN  = "Wanted to check in about {name}'s website"
 
 PLAIN_MOCKUP = """\
 Hi,
 
-I saw you opened my email — I already built a free website preview for {name}. \
-Here it is:
+Just wanted to follow up — I noticed you spent some time on the {name} preview I built.
 
-{mockup_url}
+I take that as a good sign.
 
-It's live and ready. If you like it, just fill out my quick intake form and I'll \
-get started building the real thing:
+If you liked what you saw, I put together a quick form just for you — it shows the \
+preview again, lets you tell me what you'd change, and shows you exactly what your \
+total would be based on what you select:
 
-https://webbymaya.com/book
+{intake_url}
 
-Sites start at $799 and go live within a week. No calls needed — everything by email.
+Takes about 5 minutes. No calls, no obligation — just tell me what you want and I'll \
+send you a final quote.
+
+I only take on 3–4 new sites per week, so if you're interested, sooner is better.
 
 — Maya
-Web Designer · WebByMaya.com
-maya@webbymaya.com
-"""
-
-HTML_MOCKUP = """\
-<html><body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto;padding:20px">
-<p>Hi,</p>
-<p>I saw you opened my email — I already built a free website preview for <strong>{name}</strong>.</p>
-<table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;">
-  <tr>
-    <td style="background:#0d0d0d;border-radius:8px;padding:24px;text-align:center;">
-      <div style="font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#C9A96E;margin-bottom:10px;font-family:Arial,sans-serif;">Your free website preview</div>
-      <a href="{mockup_url}" style="display:inline-block;background:#C9A96E;color:#0d0d0d;padding:14px 32px;border-radius:6px;font-weight:800;font-size:15px;font-family:Arial,sans-serif;text-decoration:none;">
-        &#128064;&nbsp; View Your Preview &rarr;
-      </a>
-      <div style="font-size:12px;color:#666;margin-top:10px;font-family:Arial,sans-serif;">It's live and ready — takes 2 minutes to look at</div>
-    </td>
-  </tr>
-</table>
-<p>If you like it, fill out my quick intake form and I'll build the real thing:</p>
-<p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#111;padding:10px 22px;text-decoration:none;font-weight:bold;border-radius:4px;display:inline-block;font-family:Arial,sans-serif;">Fill Out My Website Form &rarr;</a></p>
-<p style="color:#888;font-size:13px;">Sites start at $799 · Live in one week · No calls needed</p>
-<p>— Maya<br>Web Designer · <a href="https://webbymaya.com">WebByMaya.com</a></p>
-</body></html>
+WebByMaya.com · maya@webbymaya.com
 """
 
 PLAIN_PLAIN = """\
 Hi,
 
-I saw you opened my email — thanks for taking a look!
+I saw you opened my email about building a website for {name} — wanted to follow up.
 
-I'd love to build a free website preview for your business. \
-If you're curious, just fill out my quick intake form and I'll send one over within 24 hours:
+I'd love to build you a free preview so you can see exactly what your site could \
+look like before committing to anything.
 
-https://webbymaya.com/book
-
-Sites start at $799 and go live within a week. No calls needed.
+If you're interested, just reply YES and I'll send one over same day.
 
 — Maya
-Web Designer · WebByMaya.com
+WebByMaya.com · maya@webbymaya.com
 """
 
-HTML_PLAIN = """\
-<html><body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto;padding:20px">
-<p>Hi,</p>
-<p>I saw you opened my email — thanks for taking a look!</p>
-<p>I'd love to build a <strong>free website preview</strong> for your business. \
-Fill out my quick intake form and I'll send one over within 24 hours:</p>
-<p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#111;padding:10px 22px;text-decoration:none;font-weight:bold;border-radius:4px;display:inline-block;font-family:Arial,sans-serif;">Fill Out My Website Form &rarr;</a></p>
-<p style="color:#888;font-size:13px;">Sites start at $799 · Live in one week · No calls needed</p>
-<p>— Maya<br>Web Designer · <a href="https://webbymaya.com">WebByMaya.com</a></p>
-</body></html>
-"""
+def _html_mockup(name: str, intake_url: str, email: str = "") -> str:
+    return html_card(
+        _ep(f"Just wanted to follow up — I noticed you spent some time on the <strong>{name}</strong> preview I built. I take that as a good sign.")
+        + _ep("I put together a quick form just for you — it shows the preview again, lets you tell me what you'd change, and shows you <strong>exactly what your total would be</strong> based on what you select. Takes about 5 minutes.")
+        + _ecta(intake_url, "Open My Personalized Form &rarr;")
+        + _ep("No calls &nbsp;&middot;&nbsp; No obligation &nbsp;&middot;&nbsp; See your price before you commit", muted=True, small=True)
+        + _ep("I only take on 3–4 new sites per week — if you're interested, sooner is better.", muted=True, small=True, italic=True),
+        email=email,
+    )
+
+def _html_plain(name: str, email: str = "") -> str:
+    return html_card(
+        _ep(f"I saw you opened my email about building a website for <strong>{name}</strong> — wanted to follow up.")
+        + _ep("I'd love to build you a <strong>free preview</strong> so you can see exactly what your site could look like before committing to anything.")
+        + _ecta("", f'Just reply <span style="color:#C9A96E;">YES</span> and I\'ll send one over the same day.', dark=True)
+        + _ep("Starting at $499 &nbsp;&middot;&nbsp; Live in 7 days &nbsp;&middot;&nbsp; No monthly fees", muted=True, small=True),
+        email=email,
+    )
 
 # Domains that are bots / wrong enrichment — skip these
 BOT_DOMAINS = {
@@ -209,6 +195,7 @@ def _gmail_token() -> str:
 
 
 def send_email(to: str, subject: str, plain: str, html: str) -> bool:
+    # Try Gmail OAuth first
     access = _gmail_token()
     if access:
         try:
@@ -230,10 +217,33 @@ def send_email(to: str, subject: str, plain: str, html: str) -> bool:
             urllib.request.urlopen(req, timeout=10)
             return True
         except urllib.error.HTTPError as e:
-            print(f"  [GMAIL ERROR] {e.code}: {e.read().decode()[:200]}")
+            print(f"  [GMAIL ERROR] {e.code} — falling back to SendGrid")
         except Exception as exc:
-            print(f"  [GMAIL ERROR] {exc}")
-    print("  [ERROR] No valid Gmail token — skipping")
+            print(f"  [GMAIL ERROR] {exc} — falling back to SendGrid")
+
+    # Fallback: SendGrid
+    if SG:
+        try:
+            body = json.dumps({
+                "personalizations": [{"to": [{"email": to}]}],
+                "from":    {"email": SENDER_EMAIL, "name": SENDER_NAME},
+                "subject": subject,
+                "content": [
+                    {"type": "text/plain", "value": plain},
+                    {"type": "text/html",  "value": html},
+                ],
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.sendgrid.com/v3/mail/send",
+                data=body, method="POST",
+                headers={"Authorization": f"Bearer {SG}",
+                         "Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+            return True
+        except Exception as e:
+            print(f"  [SENDGRID ERROR] {e}")
+
+    print("  [ERROR] No sender available (no Gmail token, no SendGrid key)")
     return False
 
 
@@ -285,15 +295,9 @@ def fetch_clickers() -> list[dict]:
         if click_time < cutoff:
             continue
 
-        subj = m.get("subject", "")
-        name = (subj
-                .replace("Quick question, ", "")
-                .replace("Still thinking about it, ", "")
-                .rstrip("?").strip()) or email_addr.split("@")[0]
-
         results.append({
             "email":      email_addr,
-            "name":       name,
+            "name":       "",  # filled in below from send log
             "click_time": click_time,
             "clicks":     clicks,
             "opens":      opens,
@@ -305,7 +309,41 @@ def fetch_clickers() -> list[dict]:
         e = r["email"]
         if e not in seen or r["click_time"] > seen[e]["click_time"]:
             seen[e] = r
-    return list(seen.values())
+
+    # Cross-reference send logs to get real business name + category
+    # and filter out domain mismatches (enrichment errors)
+    email_to_biz: dict[str, dict] = {}
+    for p in sorted(SCRIPT_DIR.glob("send_log_*.csv")):
+        try:
+            with open(p, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    if row.get("status") == "sent":
+                        em = row.get("email_sent_to", "").lower().strip()
+                        if em and em not in email_to_biz:
+                            email_to_biz[em] = {
+                                "name":     row.get("name", ""),
+                                "category": row.get("category", ""),
+                            }
+        except Exception:
+            pass
+
+    final = []
+    for r in seen.values():
+        em   = r["email"]
+        biz  = email_to_biz.get(em, {})
+        name = biz.get("name", "")
+        if not name:
+            continue  # skip if not in send log — not a prospect we contacted
+        # Domain mismatch check: ≥1 word (3+ chars) from biz name must appear in email domain
+        biz_words = set(re.findall(r"[a-z]{3,}", name.lower()))
+        domain    = em.split("@")[-1].split(".")[0]  # e.g. "rittenhousehotel"
+        if biz_words and not any(w in domain for w in biz_words):
+            continue  # enrichment mismatch — skip
+        r["name"]     = name
+        r["category"] = biz.get("category", "")
+        final.append(r)
+
+    return final
 
 
 # ── State helpers ─────────────────────────────────────────────────────────────
@@ -321,14 +359,15 @@ def load_suppressed() -> set:
 
 
 def load_already_sent() -> set:
-    """Emails that already got the clicker follow-up."""
+    """Emails that already successfully got the clicker follow-up."""
     sent = set()
     for p in SCRIPT_DIR.glob("clicker_followup_log_*.csv"):
         with open(p, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
-                e = row.get("email", "").strip().lower()
-                if e:
-                    sent.add(e)
+                if row.get("status", "").startswith("sent"):
+                    e = row.get("email", "").strip().lower()
+                    if e:
+                        sent.add(e)
     return sent
 
 
@@ -379,7 +418,7 @@ def main():
 
     print(f"\nClicker follow-up — {datetime.date.today()}")
     print(f"Clickers found    : {len(clickers)}")
-    print(f"Due (48h+ ago)    : {len(due)}")
+    print(f"Due ({args.hours}h+ ago)    : {len(due)}")
     print(f"Will send         : {min(len(due), args.limit)}")
     if args.dry_run:
         print("MODE: DRY RUN\n")
@@ -394,22 +433,31 @@ def main():
 
         print(f"\n[{i+1}/{min(len(due), args.limit)}] {name} <{to}>  ({hrs}h ago)")
 
-        # Try to pre-generate mockup
+        # Try to get mockup URL + generate personalized intake form
         mockup_url = None
+        intake_url = None
         if not args.dry_run:
-            print("  Generating mockup...")
             mockup_url = try_generate_mockup(name, to, lead_row)
             if mockup_url:
-                print(f"  Mockup ready: {mockup_url}")
+                # Generate personalized intake form (shows mockup + add-on pricing)
+                try:
+                    import sys as _sys
+                    _sys.path.insert(0, str(SCRIPT_DIR))
+                    from generate_intake_form import upload_intake_form
+                    cat = (lead_row or {}).get("category", "")
+                    intake_url = upload_intake_form(name, cat, mockup_url)
+                    print(f"  Intake form : {intake_url}")
+                except Exception as _e:
+                    intake_url = mockup_url  # fallback to mockup link
 
-        if mockup_url:
+        if mockup_url and intake_url:
             subject = SUBJECT_MOCKUP.format(name=name)
-            plain   = PLAIN_MOCKUP.format(name=name, mockup_url=mockup_url)
-            html    = HTML_MOCKUP.format(name=name, mockup_url=mockup_url)
+            plain   = PLAIN_MOCKUP.format(name=name, intake_url=intake_url)
+            html    = _html_mockup(name, intake_url, email=c["email"])
         else:
             subject = SUBJECT_PLAIN.format(name=name)
-            plain   = PLAIN_PLAIN
-            html    = HTML_PLAIN
+            plain   = PLAIN_PLAIN.format(name=name)
+            html    = _html_plain(name, email=c["email"])
 
         print(f"  Subject  : {subject}")
 
