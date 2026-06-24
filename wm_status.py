@@ -119,9 +119,16 @@ def main():
 
     # ── Zone state ────────────────────────────────────────────────────────
     zones     = zone_state.get("zones", [])
-    completed = zone_state.get("completed", [])
+    completed_raw = zone_state.get("completed", [])
     cur_idx   = zone_state.get("current_index", 0)
     remaining = zones[cur_idx:]
+    # deduplicate by zone name — keep latest date
+    seen: dict = {}
+    for entry in completed_raw:
+        z = entry["zone"]
+        if z not in seen or entry["date"] > seen[z]["date"]:
+            seen[z] = entry
+    completed = list(seen.values())
 
     # ─────────────────────────────────────────────────────────────────────
     print(f"\n  {BOLD}{C}WebByMaya — Campaign Status  [{today}]{R}")
