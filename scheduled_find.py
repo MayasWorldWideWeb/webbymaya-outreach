@@ -94,11 +94,24 @@ def main():
     seen_phones: set[str] = set()
     seen_names:  list[str] = []
 
+    # Load emails already sent so we don't re-enrich contacted businesses
+    already_sent_emails: set[str] = set()
+    for _sl in sorted(SCRIPT_DIR.glob("send_log_*.csv")):
+        with open(_sl, newline="", encoding="utf-8") as _f:
+            for _r in csv.DictReader(_f):
+                if _r.get("status") == "sent":
+                    _e = _r.get("email_sent_to", "").lower().strip()
+                    if _e:
+                        already_sent_emails.add(_e)
+
     # Load any rows already in today's CSV from a previous pass
     main_csv = SCRIPT_DIR / f"prospects_{today}.csv"
     if main_csv.exists():
         with open(main_csv, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
+                email = row.get("email", "").lower().strip()
+                if email and email in already_sent_emails:
+                    continue  # drop already-contacted businesses from prior fallback
                 yelp_rows.append(row)
                 ph = row.get("phone","").strip()
                 nm = row.get("name","").strip().lower()

@@ -44,7 +44,12 @@ for p in csvs:
     fieldnames = rows[0].keys()
     for r in rows:
         phone = r.get("phone","").strip()
-        if not phone or phone in texted or phone in seen_phones:
+        email = r.get("email","").lower().strip()
+        if phone in texted or phone in seen_phones:
+            continue
+        if email and email in emailed:
+            continue
+        if not phone and not email:
             continue
         seen_phones.add(phone)
         # Reset send statuses so they get picked up
