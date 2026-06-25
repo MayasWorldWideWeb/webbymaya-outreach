@@ -845,15 +845,30 @@ def get_automation_health():
     if not log_path.exists():
         return {"status": "unknown", "hours_ago": None, "last_line": "No log file"}
     try:
+        today_str = datetime.now().strftime("%Y-%m-%d")
         text  = log_path.read_text(encoding="utf-8", errors="replace").strip()
         lines = text.split("\n") if text else []
         mtime = datetime.fromtimestamp(log_path.stat().st_mtime)
         hours_ago = round((datetime.now() - mtime).total_seconds() / 3600, 1)
-        tail  = "\n".join(lines[-15:]).lower()
-        status = "error" if ("error" in tail or "traceback" in tail) else "ok"
+
+        # Find the most recent run's start line index for today
+        today_header = f"WebByMaya Daily Run — {today_str}"
+        run_starts = [i for i, l in enumerate(lines) if today_header in l]
+        if run_starts:
+            last_run_lines = lines[run_starts[-1]:]
+            # Check only the current run's output for errors, not zombie output
+            tail = "\n".join(last_run_lines[-20:]).lower()
+            ran_today = True
+        else:
+            tail = "\n".join(lines[-15:]).lower()
+            ran_today = False
+
+        has_error = "traceback" in tail  # only flag actual Python crashes, not send errors
+        status = "error" if has_error else ("ok" if ran_today else "warning")
         return {
             "status":    status,
             "hours_ago": hours_ago,
+            "ran_today": ran_today,
             "last_line": lines[-1].strip()[:100] if lines else "",
             "last_run":  mtime.strftime("%-I:%M %p, %b %-d"),
         }
