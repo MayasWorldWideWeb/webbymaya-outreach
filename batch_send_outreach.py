@@ -165,7 +165,9 @@ def validate_email(email: str) -> tuple[bool, str]:
     # 2. MX record check — confirms domain actually accepts mail (not just exists)
     try:
         import dns.resolver
-        dns.resolver.resolve(domain, "MX")
+        _r = dns.resolver.Resolver()
+        _r.lifetime = 5.0  # total timeout in seconds — prevents infinite hang on non-responsive nameservers
+        _r.resolve(domain, "MX")
     except Exception as _dns_err:
         err_name = type(_dns_err).__name__
         if "NXDOMAIN" in err_name or "NoNameservers" in err_name:
@@ -1491,11 +1493,6 @@ def main():
         print("No prospects match the filter. Exiting.")
         return
 
-    # Apply --limit
-    if args.limit < len(prospects):
-        print(f"Limiting to {args.limit} email(s) this run (--limit {args.limit}).")
-    prospects = prospects[: args.limit]
-
     # ---- Confirm at least one sending method is available ----------------
     if not args.dry_run and not SENDGRID_API_KEY and not BREVO_API_KEY and not GMAIL_TOKEN_PATH.exists():
         sys.exit("ERROR: No email provider configured. Need SENDGRID_API_KEY, BREVO_API_KEY, or Gmail token.")
@@ -1579,6 +1576,9 @@ def main():
                     if page_id:
                         mark_notion_contacted(page_id, today_str)
                         print(f"  Notion updated: Status → Contacted.")
+                    if sent_count >= args.limit:
+                        print(f"\n  Sent limit reached ({args.limit}). Stopping.")
+                        break
                     if all(p in _exhausted_providers for p in ("sendgrid", "brevo", "brevo2", "gmail")):
                         print("\n  All email providers exhausted for today. Stopping.")
                         break
@@ -1622,9 +1622,9 @@ def main():
     # ---- Summary ---------------------------------------------------------
     print("\n" + "=" * 50)
     if args.dry_run:
-        print(f"DRY RUN complete. {len(prospects)} email(s) previewed.")
+        print(f"DRY RUN complete. {len(log_rows)} email(s) previewed.")
     else:
-        print(f"Done. Sent: {sent_count}  |  Failed: {failed_count}  |  Skipped (no email): {len(log_rows) - sent_count - failed_count}")
+        print(f"Done. Sent: {sent_count}  |  Failed: {failed_count}  |  Skipped: {len(log_rows) - sent_count - failed_count}  |  Rows scanned: {len(log_rows)}")
     print(f"Send log written to: {log_path}")
 
 
