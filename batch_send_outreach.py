@@ -115,13 +115,22 @@ def _load_suppressed() -> set:
 
 SUPPRESSED_EMAILS = _load_suppressed()
 
+# Providers whose "sent" rows never actually delivered — the recipient must be
+# re-contactable. "brevo" = Brevo account #1, whose sender maya@webbymaya.com was
+# never validated, so it async-rejected 100% of mail (0 delivered of 1,590).
+_FAILED_SEND_PROVIDERS = {"brevo"}
+
+
 def _load_all_sent() -> set:
-    """Return every email already sent across ALL historical send logs — prevents cross-CSV duplicates."""
+    """Return every email TRULY sent across ALL historical send logs — prevents
+    cross-CSV duplicates. Rows sent via a failed provider (see above) are NOT
+    counted, so those businesses get re-contacted since first contact never landed."""
     sent = set()
     for p in sorted(Path(__file__).parent.glob("send_log_*.csv")):
         with open(p, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
-                if row.get("status") == "sent":
+                if row.get("status") == "sent" and \
+                   (row.get("notes") or "").strip().lower() not in _FAILED_SEND_PROVIDERS:
                     e = row.get("email_sent_to", "").strip().lower()
                     if e:
                         sent.add(e)
@@ -183,6 +192,92 @@ def validate_email(email: str) -> tuple[bool, str]:
         return False, "disposable/throwaway address"
 
     return True, ""
+
+
+# ---------------------------------------------------------------------------
+# SMTP mailbox verification — cuts "550 No Such User" bounces before they
+# happen. This is what tanks deliverability: a high bounce rate signals
+# "scraped list" to Gmail/Outlook and lands even valid mail in spam.
+# ---------------------------------------------------------------------------
+
+VERIFY_MAILBOXES = True   # can be disabled with --no-verify
+_VERIFY_CACHE_PATH = Path(__file__).parent / ".mailbox_verify_cache.json"
+
+# Phrases that mean the mailbox genuinely doesn't exist (vs. an anti-probe block)
+_NO_MAILBOX_HINTS = (
+    "no such", "unknown", "doesn't exist", "does not exist", "no mailbox",
+    "invalid recipient", "user unknown", "recipient rejected", "not exist",
+    "no account", "unrouteable", "unroutable", "address rejected", "not found",
+    "mailbox not", "recipient not found", "5.1.1", "5.1.0",
+)
+
+
+def _load_verify_cache() -> dict:
+    try:
+        return json.loads(_VERIFY_CACHE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_verify_cache() -> None:
+    try:
+        _VERIFY_CACHE_PATH.write_text(json.dumps(_VERIFY_CACHE))
+    except Exception:
+        pass
+
+
+_VERIFY_CACHE = _load_verify_cache()
+
+
+def verify_mailbox(email: str, timeout: int = 12) -> tuple[bool, str]:
+    """SMTP RCPT probe to confirm a mailbox exists before we send to it.
+
+    DELIBERATELY conservative — returns False ONLY on a definitive
+    'no such user' rejection. Greylists, timeouts, catch-all servers, and
+    anti-probe 5xx blocks all FAIL OPEN (return True) so we never drop a real
+    lead. Results are cached to disk so re-runs don't re-probe."""
+    email_l = (email or "").strip().lower()
+    if not email_l or "@" not in email_l:
+        return True, ""                      # let validate_email own format errors
+    if email_l in _VERIFY_CACHE:
+        c = _VERIFY_CACHE[email_l]
+        return c["ok"], c["reason"]
+
+    domain = email_l.split("@")[-1]
+    result = (True, "")                       # default: fail open
+    try:
+        import dns.resolver, smtplib
+        _r = dns.resolver.Resolver()
+        _r.lifetime = 5.0
+        mxs = sorted(_r.resolve(domain, "MX"), key=lambda r: r.preference)
+        mx_host = str(mxs[0].exchange).rstrip(".")
+
+        srv = smtplib.SMTP(timeout=timeout)
+        srv.connect(mx_host, 25)
+        srv.helo("webbymaya.com")
+        srv.mail("maya@webbymaya.com")
+        code, msg = srv.rcpt(email_l)
+        try:
+            srv.quit()
+        except Exception:
+            pass
+
+        msg_s = (msg.decode(errors="replace") if isinstance(msg, bytes) else str(msg)).lower()
+        if 200 <= code < 300:
+            result = (True, "")
+        elif code in (550, 551, 553, 554) and any(h in msg_s for h in _NO_MAILBOX_HINTS):
+            result = (False, f"no such mailbox (SMTP {code})")
+        else:
+            result = (True, f"unverified (SMTP {code})")   # ambiguous/greylist → send anyway
+    except Exception:
+        result = (True, "unverified (probe error)")         # network/DNS/block → fail open
+
+    _VERIFY_CACHE[email_l] = {"ok": result[0], "reason": result[1]}
+    return result
+
+
+import atexit as _atexit
+_atexit.register(_save_verify_cache)
 
 # Platform/SaaS domains that forward to the software company, not the business owner
 SKIP_DOMAINS = {
@@ -445,10 +540,10 @@ def normalize_category(name: str, category: str) -> str:
 # 7 subject-line angles — one per day of week (Mon=0 … Sun=6)
 # Each is a format string taking {name}
 _SUBJECT_ANGLES = [
-    "I built {name} a website — free preview inside",          # Mon
+    "I built {name} a website — preview inside",               # Mon
     "Your {name} customers can't find you — I made a site",    # Tue
-    "{name} doesn't show up online — I fixed that for free",   # Wed
-    "Free website preview for {name}",                         # Thu
+    "{name} doesn't show up online — so I built this",         # Wed
+    "A website preview for {name}",                            # Thu
     "I put together a site for {name} — take a look",          # Fri
     "{name} is missing from Google — I built something",       # Sat
     "Quick question about {name}'s online presence",           # Sun
@@ -456,45 +551,45 @@ _SUBJECT_ANGLES = [
 
 # Category overrides that still rotate on the second token of each angle
 _SUBJECT_CAT_OVERRIDE = {
-    "nail salon":       ["I built {name} a nail salon website (free preview)",
+    "nail salon":       ["I built {name} a nail salon website — preview inside",
                          "Your {name} clients can't find you online",
                          "{name} doesn't show up for nail salons near me",
-                         "Free nail salon website preview — {name}",
+                         "A nail salon website preview for {name}",
                          "I made a nail salon site for {name} — see it",
                          "{name} is missing from Google Maps",
                          "Quick question for {name}"],
-    "hair salon":       ["I built {name} a hair salon website (free preview)",
+    "hair salon":       ["I built {name} a hair salon website — preview inside",
                          "Your {name} clients can't find you online",
                          "{name} doesn't show up for hair salons near me",
-                         "Free hair salon website preview — {name}",
+                         "A hair salon website preview for {name}",
                          "I made a salon site for {name} — take a look",
                          "{name} isn't showing up on Google",
                          "Quick question for {name}"],
-    "barbershop":       ["I built {name} a barbershop website (free preview)",
+    "barbershop":       ["I built {name} a barbershop website — preview inside",
                          "Your {name} customers can't find you online",
                          "{name} doesn't show up for barbers near me",
-                         "Free barber website preview — {name}",
+                         "A barbershop website preview for {name}",
                          "I made a barbershop site for {name} — see it",
                          "{name} is missing from Google",
                          "Quick question for {name}"],
-    "restaurant":       ["I built {name} a restaurant website (free preview)",
+    "restaurant":       ["I built {name} a restaurant website — preview inside",
                          "Your {name} customers can't find your menu online",
                          "{name} doesn't show up for restaurants near me",
-                         "Free restaurant website preview — {name}",
+                         "A restaurant website preview for {name}",
                          "I made a restaurant site for {name} — take a look",
                          "{name} isn't showing up on Google",
                          "Quick question for {name}"],
     "auto repair":      ["{name} is missing from Google — I built a site",
                          "Your {name} customers can't find you online",
                          "{name} doesn't show up for auto repair near me",
-                         "Free auto shop website preview — {name}",
+                         "An auto shop website preview for {name}",
                          "I made an auto repair site for {name}",
                          "{name} isn't showing up on Google Maps",
                          "Quick question for {name}"],
-    "cleaning service": ["I built {name} a cleaning website (free preview)",
+    "cleaning service": ["I built {name} a cleaning website — preview inside",
                          "Your {name} customers can't find you online",
                          "{name} doesn't show up for cleaning services near me",
-                         "Free cleaning website preview — {name}",
+                         "A cleaning website preview for {name}",
                          "I made a cleaning service site for {name}",
                          "{name} isn't showing up on Google",
                          "Quick question for {name}"],
@@ -527,8 +622,8 @@ def get_subject(name: str, category: str) -> str:
             angles = [
                 base,
                 "Your {name} customers can't find you — I made a site",
-                "{name} doesn't show up online — I fixed that for free",
-                "Free website preview for {name}",
+                "{name} doesn't show up online — so I built this",
+                "A website preview for {name}",
                 "I put together a site for {name} — take a look",
                 "{name} is missing from Google — I built something",
                 "Quick question about {name}'s online presence",
@@ -920,6 +1015,24 @@ def _gmail_access_token() -> str:
 # Provider daily-limit state — persists across runs (file-backed, resets at midnight)
 # ---------------------------------------------------------------------------
 _PROVIDER_LIMIT_FILE = Path.home() / ".webbymaaya/provider_limits.json"
+_TRACKING_SENDS_FILE = Path.home() / ".webbymaaya/tracking_sends.json"
+
+
+def _record_tracking_send() -> None:
+    """Count first-touch emails sent WITH a tracking link, per day.
+    Gives click-rate its denominator (clicks/opens are tracked per recipient
+    in clicker_cache.json; this is the 'how many did we send' side)."""
+    try:
+        data = json.loads(_TRACKING_SENDS_FILE.read_text()) if _TRACKING_SENDS_FILE.exists() else {}
+    except Exception:
+        data = {}
+    today = str(datetime.date.today())
+    data[today] = int(data.get(today, 0)) + 1
+    try:
+        _TRACKING_SENDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TRACKING_SENDS_FILE.write_text(json.dumps(data))
+    except Exception:
+        pass
 
 def _load_exhausted() -> set:
     """Return providers that already hit their daily limit today."""
@@ -943,8 +1056,44 @@ def _mark_exhausted(provider: str) -> None:
 _exhausted_providers: set = _load_exhausted()
 
 
+def _post_with_retry(url: str, headers: dict, payload: bytes,
+                     timeout: int = 20, retries: int = 4):
+    """POST with exponential backoff on TRANSIENT failures (network timeouts,
+    connection errors, 429 throttles, 5xx). Returns:
+      (ok, code, body, capped) where `capped` means a genuine daily-limit/credit
+      signal (caller should mark the provider exhausted). Transient errors are
+      retried with 1s/2s/4s backoff before giving up — this is the fix for the
+      single-attempt failures that tanked the batch."""
+    import urllib.request, urllib.error, time as _t
+    last_code, last_body = None, ""
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=timeout)
+            return True, 200, "", False
+        except urllib.error.HTTPError as e:
+            last_code = e.code
+            try:
+                last_body = e.read().decode()[:300]
+            except Exception:
+                last_body = ""
+            bl = last_body.lower()
+            capped = (e.code == 402 or any(k in bl for k in (
+                "daily limit", "quota", "credit", "dailysendinglimit", "not enough")))
+            if capped:
+                return False, e.code, last_body, True            # real cap → exhaust, no retry
+            if e.code == 429 or 500 <= e.code < 600:
+                _t.sleep(2 ** attempt)                            # transient throttle/server → retry
+                continue
+            return False, e.code, last_body, False                # hard 4xx (bad addr etc.) → fail row, no retry
+        except Exception as exc:
+            last_body = str(exc)
+            _t.sleep(2 ** attempt)                                # network/DNS/timeout → retry
+            continue
+    return False, last_code, last_body, False
+
+
 def _send_via_sendgrid(to: str, subject: str, plain: str, html: str) -> bool:
-    import urllib.request, urllib.error
     if not SENDGRID_API_KEY or "sendgrid" in _exhausted_providers:
         return False
     payload = json.dumps({
@@ -953,30 +1102,24 @@ def _send_via_sendgrid(to: str, subject: str, plain: str, html: str) -> bool:
         "subject": subject,
         "content": [{"type": "text/plain", "value": plain}, {"type": "text/html", "value": html}],
     }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.sendgrid.com/v3/mail/send", data=payload,
-        headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
-        method="POST")
-    try:
-        urllib.request.urlopen(req)
+    ok, code, body, capped = _post_with_retry(
+        "https://api.sendgrid.com/v3/mail/send",
+        {"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+        payload)
+    if ok:
         return True
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:300]
-        if e.code in (401, 402, 429, 403) or "limit" in body.lower() or "quota" in body.lower() or "credits" in body.lower():
-            print("  [SG] Daily limit reached — switching to Brevo.")
-            _exhausted_providers.add("sendgrid")
-            _mark_exhausted("sendgrid")
-        else:
-            print(f"  [SG ERROR] {e.code}: {body}")
-        return False
-    except Exception as exc:
-        print(f"  [SG ERROR] {exc}")
-        return False
+    # SendGrid: a bad/over-limit key (401/403) means it'll never work today → switch away
+    if capped or code in (401, 403):
+        print("  [SG] Unavailable (limit/auth) — switching provider.")
+        _exhausted_providers.add("sendgrid")
+        _mark_exhausted("sendgrid")
+    else:
+        print(f"  [SG ERROR] {code}: {body}")
+    return False
 
 
 def _send_via_brevo(to: str, subject: str, plain: str, html: str) -> bool:
     """Brevo REST API — 300 emails/day free."""
-    import urllib.request, urllib.error
     if not BREVO_API_KEY or "brevo" in _exhausted_providers:
         return False
     payload = json.dumps({
@@ -986,30 +1129,23 @@ def _send_via_brevo(to: str, subject: str, plain: str, html: str) -> bool:
         "textContent": plain,
         "htmlContent": html,
     }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.brevo.com/v3/smtp/email", data=payload,
-        headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
-        method="POST")
-    try:
-        urllib.request.urlopen(req, timeout=10)
+    ok, code, body, capped = _post_with_retry(
+        "https://api.brevo.com/v3/smtp/email",
+        {"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
+        payload)
+    if ok:
         return True
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:300]
-        if e.code in (400, 402, 429) or "limit" in body.lower() or "quota" in body.lower() or "credit" in body.lower() or "dailySendingLimit" in body:
-            print("  [Brevo] Daily limit reached — switching to Gmail.")
-            _exhausted_providers.add("brevo")
-            _mark_exhausted("brevo")
-        else:
-            print(f"  [BREVO ERROR] {e.code}: {body}")
-        return False
-    except Exception as exc:
-        print(f"  [BREVO ERROR] {exc}")
-        return False
+    if capped:
+        print("  [Brevo] Daily limit reached — switching provider.")
+        _exhausted_providers.add("brevo")
+        _mark_exhausted("brevo")
+    else:
+        print(f"  [BREVO ERROR] {code}: {body}")   # transient already retried; don't exhaust
+    return False
 
 
 def _send_via_brevo2(to: str, subject: str, plain: str, html: str) -> bool:
     """Second Brevo account — another free 300/day."""
-    import urllib.request, urllib.error
     if not BREVO_API_KEY_2 or "brevo2" in _exhausted_providers:
         return False
     payload = json.dumps({
@@ -1019,25 +1155,19 @@ def _send_via_brevo2(to: str, subject: str, plain: str, html: str) -> bool:
         "textContent": plain,
         "htmlContent": html,
     }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.brevo.com/v3/smtp/email", data=payload,
-        headers={"api-key": BREVO_API_KEY_2, "Content-Type": "application/json"},
-        method="POST")
-    try:
-        urllib.request.urlopen(req, timeout=10)
+    ok, code, body, capped = _post_with_retry(
+        "https://api.brevo.com/v3/smtp/email",
+        {"api-key": BREVO_API_KEY_2, "Content-Type": "application/json"},
+        payload)
+    if ok:
         return True
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:300]
-        if e.code in (400, 402, 429) or "limit" in body.lower() or "quota" in body.lower() or "credit" in body.lower() or "dailySendingLimit" in body:
-            print("  [Brevo2] Daily limit reached — switching to Mailgun.")
-            _exhausted_providers.add("brevo2")
-            _mark_exhausted("brevo2")
-        else:
-            print(f"  [BREVO2 ERROR] {e.code}: {body}")
-        return False
-    except Exception as exc:
-        print(f"  [BREVO2 ERROR] {exc}")
-        return False
+    if capped:
+        print("  [Brevo2] Daily limit reached — switching provider.")
+        _exhausted_providers.add("brevo2")
+        _mark_exhausted("brevo2")
+    else:
+        print(f"  [BREVO2 ERROR] {code}: {body}")
+    return False
 
 
 _sendpulse_token: dict = {}  # {"token": str, "expires": float}
@@ -1197,9 +1327,13 @@ def send_email(to: str, subject: str, plain: str, html: str) -> tuple[bool, str]
     Total: up to 1,700/day when all providers are active.
     Returns (success, provider_used).
     """
-    if "brevo" not in _exhausted_providers and BREVO_API_KEY:
-        if _send_via_brevo(to, subject, plain, html):
-            return True, "brevo"
+    # ORDER MATTERS: only providers where the sender maya@webbymaya.com is
+    # actually VALIDATED will deliver. Brevo #1 has NOT validated this sender
+    # (only mayas.worldwide.web@gmail.com), so it async-rejects 100% of mail
+    # even though its API returns 2xx — that silently killed all delivery.
+    # Brevo #2 (sender validated) and SendGrid (domain-authenticated) work, so
+    # they go first. Brevo #1 is demoted to last-resort until its sender is
+    # validated in the Brevo dashboard.
     if "brevo2" not in _exhausted_providers and BREVO_API_KEY_2:
         if _send_via_brevo2(to, subject, plain, html):
             return True, "brevo2"
@@ -1212,6 +1346,11 @@ def send_email(to: str, subject: str, plain: str, html: str) -> tuple[bool, str]
     if "mailgun" not in _exhausted_providers and MAILGUN_API_KEY:
         if _send_via_mailgun(to, subject, plain, html):
             return True, "mailgun"
+    # Brevo #1 — sender not validated; kept only as a last resort so a future
+    # dashboard fix re-enables its 300/day without another code change.
+    if "brevo" not in _exhausted_providers and BREVO_API_KEY:
+        if _send_via_brevo(to, subject, plain, html):
+            return True, "brevo"
     if "gmail" not in _exhausted_providers:
         if _send_via_gmail(to, subject, plain, html):
             return True, "gmail"
@@ -1453,11 +1592,19 @@ def parse_args():
         default="none",
         help="none = only no-website businesses (default), bad = dead/parked sites only, all = everyone",
     )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip the SMTP mailbox-existence probe (faster, but higher bounce risk)",
+    )
     return parser.parse_args()
 
 
 def main():
+    global VERIFY_MAILBOXES
     args = parse_args()
+    if args.no_verify:
+        VERIFY_MAILBOXES = False
     today_str = datetime.date.today().strftime("%Y-%m-%d")
 
     # ---- Load prospects ---------------------------------------------------
@@ -1561,10 +1708,19 @@ def main():
         else:
             # Free email validation: format + DNS + disposable domain check
             valid, reason = validate_email(recipient_email)
+            verify_ok, verify_reason = (True, "")
+            if valid and VERIFY_MAILBOXES:
+                # SMTP mailbox probe — skip dead mailboxes before they bounce
+                verify_ok, verify_reason = verify_mailbox(recipient_email)
             if not valid:
                 status = "skipped"
                 note   = f"Disify: {reason}"
                 print(f"  Skipped — {reason}: {recipient_email}")
+            elif not verify_ok:
+                status = "skipped"
+                note   = f"Bad mailbox: {verify_reason}"
+                SUPPRESSED_EMAILS.add(recipient_email.lower())   # never try again
+                print(f"  Skipped — {verify_reason}: {recipient_email}")
             else:
                 success, provider = send_email(recipient_email, subject, plain, html)
                 if success:
@@ -1572,6 +1728,8 @@ def main():
                     status = "sent"
                     note   = provider
                     ALREADY_SENT_EMAILS.add(recipient_email.lower())
+                    if mockup_url:           # email carries a tracked preview link
+                        _record_tracking_send()
                     print(f"  Sent via {provider} → {recipient_email}.")
                     if page_id:
                         mark_notion_contacted(page_id, today_str)

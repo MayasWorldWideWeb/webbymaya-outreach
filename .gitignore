@@ -48,3 +48,5 @@ migrate_to_supabase.py
 __pycache__/
 *.pyc
 *.pyo
+.mailbox_verify_cache.json
+RECONCILE_ALERT_*.txt

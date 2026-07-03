@@ -79,6 +79,42 @@ MAX_PAGES       = 3
 REQUEST_TIMEOUT = 8
 FETCH_DELAY     = 0.3
 
+_SCRIPT_DIR = Path(__file__).parent
+
+
+def _norm_business_name(name: str) -> str:
+    """Normalize a business name for cross-run dedup: strip HTML, drop
+    'Your '/'Free ' subject prefixes, lowercase, collapse to alnum words."""
+    n = re.sub(r"<[^>]+>", "", name or "")
+    n = re.sub(r"^(your|free)\s+", "", n.strip(), flags=re.I)
+    n = re.sub(r"[^a-z0-9]+", " ", n.lower()).strip()
+    return n
+
+
+# Providers whose "sent" rows never actually delivered (see batch_send_outreach).
+# "brevo" = Brevo #1, unvalidated sender, 0 delivered — those businesses must be
+# re-contactable, so we do NOT treat them as already-contacted.
+_FAILED_SEND_PROVIDERS = {"brevo"}
+
+
+def _load_contacted_names() -> set:
+    """Every business TRULY emailed (status=sent via a working provider) across
+    ALL send logs, keyed by normalized name. Skips enrichment on already-contacted
+    businesses — but NOT ones whose only send went through a failed provider."""
+    names: set = set()
+    for p in sorted(_SCRIPT_DIR.glob("send_log_*.csv")):
+        try:
+            with open(p, newline="", encoding="utf-8", errors="replace") as f:
+                for row in csv.DictReader(f):
+                    if row.get("status") == "sent" and \
+                       (row.get("notes") or "").strip().lower() not in _FAILED_SEND_PROVIDERS:
+                        nm = _norm_business_name(row.get("name", ""))
+                        if nm:
+                            names.add(nm)
+        except Exception:
+            continue
+    return names
+
 SKIP_DOMAINS = {
     "google.com", "google.co", "goo.gl",
     "facebook.com", "instagram.com", "twitter.com", "tiktok.com",
@@ -375,12 +411,26 @@ def main():
         for row in prospects:
             row.setdefault("email", "")
 
-    to_enrich = [i for i, row in enumerate(prospects) if not row.get("email", "").strip()]
-    already_done = len(prospects) - len(to_enrich)
+    contacted_names = _load_contacted_names()
+
+    to_enrich = []
+    skipped_contacted = 0
+    for i, row in enumerate(prospects):
+        if row.get("email", "").strip():
+            continue                       # already has an email — nothing to enrich
+        if _norm_business_name(row.get("name", "")) in contacted_names:
+            if "email_status" in fieldnames:
+                row["email_status"] = row.get("email_status", "") or "already_contacted"
+            skipped_contacted += 1
+            continue                       # already emailed in a prior run — don't waste a lookup
+        to_enrich.append(i)
+    already_done = len(prospects) - len(to_enrich) - skipped_contacted
 
     print(f"\nLoaded {len(prospects)} prospects.")
     if already_done:
         print(f"  {already_done} already have emails — skipping.")
+    if skipped_contacted:
+        print(f"  {skipped_contacted} already contacted in a prior run — skipping enrichment (dedup).")
     print(f"  Searching for emails for {len(to_enrich)} businesses "
           f"using {args.workers} parallel workers ...\n")
 

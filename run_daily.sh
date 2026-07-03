@@ -97,7 +97,11 @@ $PYTHON "$SCRIPT_DIR/check_bounces.py" >> "$LOG" 2>&1
 
         echo "" >> "$LOG"
         echo "[cold:4] Sending cold outreach emails..." >> "$LOG"
-        $PYTHON "$SCRIPT_DIR/scheduled_send.py" --sms-limit 0 --email-limit 500 >> "$LOG" 2>&1
+        # Cap raised to 250 on 2026-07-03 after fixing the real problem: Brevo #1
+        # rejected 100% of mail (unvalidated sender) — sends now route through the
+        # validated Brevo #2 / SendGrid. Ceiling = ~400/day (Brevo2 300 + SG 100)
+        # until maya@webbymaya.com is validated in Brevo #1 to reclaim its 300/day.
+        $PYTHON "$SCRIPT_DIR/scheduled_send.py" --sms-limit 0 --email-limit 250 >> "$LOG" 2>&1
     fi
 
     echo "" >> "$LOG"
@@ -109,7 +113,7 @@ COLD_PID=$!
 
 echo "" >> "$LOG"
 echo "[fu:1] Sending clicker follow-ups (48h after link click)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/clicker_followups.py" --limit 50 >> "$LOG" 2>&1
+$PYTHON "$SCRIPT_DIR/clicker_followups.py" --limit 30 >> "$LOG" 2>&1   # warm-up (was 50)
 
 echo "" >> "$LOG"
 echo "[fu:2] Processing replies (hot leads → pricing, opt-outs → suppression)..." >> "$LOG"
@@ -121,17 +125,19 @@ $PYTHON "$SCRIPT_DIR/form_responder.py" >> "$LOG" 2>&1
 
 echo "" >> "$LOG"
 echo "[fu:4] Follow-up drip sequences (day 3 / 7 / 14)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/followup_send.py" --limit 250 >> "$LOG" 2>&1
+$PYTHON "$SCRIPT_DIR/followup_send.py" --limit 100 >> "$LOG" 2>&1   # warm-up (was 250)
 
 echo "" >> "$LOG"
 echo "[fu:5] Seasonal campaign emails..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/seasonal_send.py" --limit 200 >> "$LOG" 2>&1
+$PYTHON "$SCRIPT_DIR/seasonal_send.py" --limit 50 >> "$LOG" 2>&1   # warm-up (was 200)
 
 # Re-engagement: Tue / Wed / Thu only
 if [ "$(date +%u)" = "2" ] || [ "$(date +%u)" = "3" ] || [ "$(date +%u)" = "4" ]; then
     echo "" >> "$LOG"
     echo "[fu:6] Re-engagement pass (30-day no-response leads)..." >> "$LOG"
-    $PYTHON "$SCRIPT_DIR/reengagement_pass.py" --limit 150 >> "$LOG" 2>&1
+    # PAUSED during warm-up (set 2026-06-29): re-mailing 30-day non-responders is the
+    # highest spam-complaint risk. Restore --limit 150 once reputation recovers (~3-4 weeks).
+    $PYTHON "$SCRIPT_DIR/reengagement_pass.py" --limit 0 >> "$LOG" 2>&1
 fi
 
 echo "" >> "$LOG"
@@ -167,6 +173,17 @@ fi
 echo "" >> "$LOG"
 echo "[wait] Follow-ups done. Waiting for cold outreach pipeline (PID $COLD_PID)..." >> "$LOG"
 wait $COLD_PID
+
+# ── HEALTH CHECK — alerts Maya (email+SMS+desktop) if the pipeline misbehaved ──
+echo "" >> "$LOG"
+echo "[health] Running daily health check..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/health_check.py" >> "$LOG" 2>&1
+
+# ── DELIVERY RECONCILE — did what we logged as "sent" actually get delivered? ──
+# Catches silent provider rejections (the Brevo #1 outage that hid for a week).
+echo "" >> "$LOG"
+echo "[reconcile] Verifying logged sends vs actual provider deliveries..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/reconcile_delivery.py" >> "$LOG" 2>&1
 
 echo "" >> "$LOG"
 echo "  Done: $(date)" >> "$LOG"
