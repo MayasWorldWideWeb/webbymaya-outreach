@@ -93,32 +93,62 @@ def _classify(text: str) -> str:
 # Suppression list
 # ---------------------------------------------------------------------------
 
+# The columns bounce_log.csv is written with. check_bounces.py appends a fifth
+# "notes" column, so anything that REWRITES the file has to carry it.
+SUPPRESS_FIELDS = ["email", "phone", "reason", "date", "notes"]
+
+
 def add_suppression(email: str = "", phone: str = "", reason: str = "unsubscribed"):
-    """Add email and/or phone to bounce_log.csv so they're never contacted again."""
-    rows = []
+    """Add email and/or phone to bounce_log.csv so they're never contacted again.
+
+    This rewrites the whole file, so it has to preserve every column already on
+    disk. It used to hardcode a 4-field writer while check_bounces.py appends a
+    5th "notes" column: DictWriter raised ValueError on the very first row —
+    *after* open(..., "w") had already truncated the file — leaving a lone
+    header and wiping the entire suppression list. That is what emptied
+    bounce_log.csv on 08-09 and again on 08-10 (800 rows → 1), silently
+    re-opening every bounced and unsubscribed address for mailing.
+
+    Two guards now: the writer takes the union of the on-disk header and ours,
+    and the write goes to a temp file that only replaces the real one once it is
+    complete — so a future mismatch fails loudly instead of destroying the list.
+    """
+    rows, disk_fields = [], []
     if SUPPRESS_FILE.exists():
         with open(SUPPRESS_FILE, newline="", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            disk_fields = list(reader.fieldnames or [])
 
-    existing_emails = {r.get("email","").lower() for r in rows}
-    existing_phones = {r.get("phone","") for r in rows}
+    # A short header over wider rows parks the extras under the None key.
+    for r in rows:
+        r.pop(None, None)
+
+    fields = disk_fields + [c for c in SUPPRESS_FIELDS if c not in disk_fields]
+
+    existing_emails = {(r.get("email") or "").lower() for r in rows}
+    existing_phones = {r.get("phone") or "" for r in rows}
+    today = datetime.date.today().isoformat()
     added = False
 
+    def _blank():
+        return {c: "" for c in fields}
+
     if email and email.lower() not in existing_emails:
-        rows.append({"email": email.lower(), "phone": "", "reason": reason,
-                     "date": datetime.date.today().isoformat()})
+        rows.append({**_blank(), "email": email.lower(), "reason": reason, "date": today})
         added = True
     if phone and phone not in existing_phones:
-        rows.append({"email": "", "phone": phone, "reason": reason,
-                     "date": datetime.date.today().isoformat()})
+        rows.append({**_blank(), "phone": phone, "reason": reason, "date": today})
         added = True
 
     if added:
-        fields = ["email", "phone", "reason", "date"]
-        with open(SUPPRESS_FILE, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=fields)
+        tmp = SUPPRESS_FILE.with_suffix(".csv.tmp")
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             w.writeheader()
-            w.writerows(rows)
+            for r in rows:
+                w.writerow({c: r.get(c, "") for c in fields})
+        os.replace(tmp, SUPPRESS_FILE)
 
 # ---------------------------------------------------------------------------
 # Pricing email
@@ -161,10 +191,12 @@ CUSTOM  — Starting at $1,999
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 All packages include:
-✓ Hosting for the first year (free)
+✓ Free domain — first year on us
+✓ Free website hosting — first year on us
 ✓ SSL certificate (https, secure)
-✓ Domain connection
+✓ Full setup — nothing technical on your end
 ✓ 30 days of post-launch support
+(After your first free year, hosting & maintenance is just $29/mo to keep it live & updated.)
 
 Ready to move forward? Fill out my quick intake form:
 
@@ -173,7 +205,7 @@ Ready to move forward? Fill out my quick intake form:
 No calls needed — I build from your answers.
 
 Maya Sierra
-WebByMaya · Philadelphia, PA
+WebByMaya · 7213 Montour St, Philadelphia, PA 19111
 maya@webbymaya.com
 webbymaya.com
 """
@@ -261,7 +293,8 @@ box-shadow:0 2px 12px rgba(0,0,0,.08)">
 
     <div style="background:#f5f5f5;border-radius:8px;padding:16px 20px;margin-bottom:28px;font-size:13px;color:#555">
       <strong style="color:#333">All packages include:</strong>
-      &nbsp; ✓ 1 year free hosting &nbsp; ✓ SSL certificate &nbsp; ✓ Domain setup &nbsp; ✓ 30-day support
+      &nbsp; ✓ Free domain (1st year) &nbsp; ✓ Free hosting (1st year) &nbsp; ✓ SSL certificate &nbsp; ✓ Full setup &nbsp; ✓ 30-day support
+      <div style="margin-top:8px;color:#888;font-size:12px">After your first free year, hosting &amp; maintenance is just $29/mo to keep it live &amp; updated.</div>
     </div>
 
     <p style="color:#333;font-size:15px;margin-bottom:20px">
@@ -285,7 +318,7 @@ box-shadow:0 2px 12px rgba(0,0,0,.08)">
 
   <div style="background:#f9f9f9;border-top:1px solid #eee;padding:20px 36px;
     font-size:12px;color:#999;text-align:center">
-    Maya Sierra · WebByMaya · Philadelphia, PA<br>
+    Maya Sierra · WebByMaya · 7213 Montour St, Philadelphia, PA 19111<br>
     <a href="mailto:maya@webbymaya.com" style="color:#C9A96E">maya@webbymaya.com</a>
     &nbsp;·&nbsp; <a href="https://webbymaya.com" style="color:#C9A96E">webbymaya.com</a>
   </div>
@@ -417,14 +450,31 @@ def _send_email(to: str, subject: str, plain: str, html: str,
         print(f"    [DRY RUN] Would email {to}: {subject}"
               + (f" + PDF {Path(attachment_path).name}" if attachment_path else ""))
         return True
+    # Route through the resilient multi-provider sender (Brevo2 → Brevo → Gmail), which
+    # also sets the List-Unsubscribe headers. SendGrid alone is exhausted, so this keeps
+    # opt-out/pricing/intake replies working. Attachment case falls through to SendGrid
+    # below (no caller currently uses it).
+    if not attachment_path:
+        try:
+            from batch_send_outreach import send_email as _multi_send
+            ok, _prov = _multi_send(to, subject, plain, html)
+            return ok
+        except Exception as _e:
+            print(f"    [auto_reply] multi-provider send failed: {_e}")
+            return False
     if not SENDGRID_KEY:
         return False
-    import json as _json
+    import json as _json, urllib.parse as _up
+    _unsub_link = f"https://ycsauzlqsjjbusugshpz.supabase.co/functions/v1/unsubscribe?email={_up.quote(to)}"
     body = {
         "personalizations": [{"to": [{"email": to}]}],
         "from": {"email": FROM_EMAIL, "name": FROM_NAME},
         "subject": subject,
         "content": [{"type": "text/plain", "value": plain}, {"type": "text/html", "value": html}],
+        "headers": {
+            "List-Unsubscribe": f"<{_unsub_link}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
     }
     if attachment_path:
         try:
@@ -508,6 +558,37 @@ def _imap_body(msg) -> str:
     return ""
 
 
+# Local-parts that are robots by definition — never worth an auto-reply.
+_ROBOT_LOCALPARTS = ("no-reply", "noreply", "no.reply", "donotreply",
+                     "do-not-reply", "do_not_reply", "mailer-daemon",
+                     "postmaster", "bounce", "bounces")
+
+
+def _is_automated(msg, from_email: str) -> bool:
+    """True if the sender looks like an autoresponder / bulk mailer.
+
+    Auto-replying to these creates infinite ping-pong loops: our reply trips
+    their autoresponder, whose reply trips ours, forever. This is exactly what
+    happened with support@nourish.com (621 loop replies before this guard).
+    """
+    local = from_email.split("@")[0].lower()
+    if any(tok in local for tok in _ROBOT_LOCALPARTS):
+        return True
+    # RFC 3834: any Auto-Submitted other than "no" means machine-generated.
+    if (msg.get("Auto-Submitted") or "").strip().lower() not in ("", "no"):
+        return True
+    if (msg.get("Precedence") or "").strip().lower() in ("bulk", "auto_reply", "junk"):
+        return True
+    if msg.get("X-Autoreply") or msg.get("X-Autorespond") or msg.get("X-Auto-Response-Suppress"):
+        return True
+    subj = (msg.get("Subject") or "").lower()
+    if any(p in subj for p in ("automatic reply", "auto-reply", "autoreply",
+                               "out of office", "out-of-office", "undeliverable",
+                               "delivery status notification", "mail delivery")):
+        return True
+    return False
+
+
 def _load_contacted() -> dict:
     contacts = {}
     for p in sorted(SCRIPT_DIR.glob("send_log_*.csv")):
@@ -534,6 +615,16 @@ def process_gmail_replies(dry_run: bool = False) -> int:
 
     replied   = _load_state()
     processed = 0
+
+    # How many times we've already auto-replied to each address. One auto-reply
+    # per sender is enough — everything after is either a loop or belongs with a
+    # human. This is what stops the ping-pong even if a robot slips past headers.
+    already_replied = {}
+    for v in replied.values():
+        if isinstance(v, dict):
+            e = (v.get("email") or "").lower()
+            if e:
+                already_replied[e] = already_replied.get(e, 0) + 1
 
     imap.select("INBOX")
     # Search for any unseen messages from addresses we contacted
@@ -564,12 +655,33 @@ def process_gmail_replies(dry_run: bool = False) -> int:
         if uid in replied:
             continue
 
+        # Guard 1: never auto-reply to an autoresponder / bulk mailer.
+        if _is_automated(msg, from_email):
+            print(f"  [skip robot] {from_email} — automated sender, no reply")
+            imap.store(num, "+FLAGS", "\\Seen")
+            replied[uid] = {"intent": "skipped_automated", "email": from_email}
+            continue
+
         body   = _imap_body(msg)
         intent = _classify(body)
         biz    = contacts.get(from_email, from_email)
 
         # Mark as seen in Gmail
         imap.store(num, "+FLAGS", "\\Seen")
+
+        # Guard 2: one auto-reply per sender. After that, only honor opt-outs;
+        # anything else is flagged for a human instead of answered again. This
+        # is the hard stop for loops like support@nourish.com.
+        if already_replied.get(from_email, 0) >= 1 and intent != "optout":
+            print(f"  [cap] {biz} <{from_email}> — already replied "
+                  f"{already_replied[from_email]}x, flagging for review")
+            replied[uid] = {"intent": "capped", "email": from_email}
+            _log_for_review(from_email, biz, body)
+            processed += 1
+            continue
+
+        # Count this sender as handled so a burst in one run still gets one reply.
+        already_replied[from_email] = already_replied.get(from_email, 0) + 1
 
         if intent == "optout":
             print(f"  [opt-out] {biz} <{from_email}>")

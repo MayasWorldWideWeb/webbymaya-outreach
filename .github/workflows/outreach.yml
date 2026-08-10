@@ -81,6 +81,20 @@ jobs:
             echo "No prospects CSV for today, skipping"
           fi
 
+      # bounce_log.csv is gitignored, so a fresh checkout has no do-not-mail
+      # list at all. Since cold sending moved here on 08-09 that meant every
+      # cloud send skipped ~470 unverified pairings, the Brevo bounces and the
+      # Supabase unsubscribes — suppressing only what SendGrid knew about.
+      # Pull the real list before anything decides who to mail.
+      - name: Load suppression list
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python3 sync_suppressions.py --pull
+          # wc -l lies here: bounce reason text contains newlines, so rows wrap.
+          python3 -c "import csv;print('Suppressed addresses on file:',sum(1 for _ in csv.DictReader(open('bounce_log.csv',newline=''))))"
+
       - name: Check bounces
         env:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
@@ -88,6 +102,12 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python3 check_bounces.py
 
+      # BREVO_* were never set here. send_email() goes brevo2 → sendgrid →
+      # brevo1, so without them every cloud send fell through to SendGrid —
+      # which has had zero credits since 2026-07-27 and answers 401. The job
+      # still exited 0, so Actions stayed green while sending nothing: 262
+      # attempted / 0 sent on 08-10, 51 / 0 on 08-07. It only became visible
+      # when cold acquisition moved here on 08-09 and stopped running locally.
       - name: Send outreach
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
@@ -95,9 +115,30 @@ jobs:
           TWILIO_AUTH_TOKEN:   ${{ secrets.TWILIO_AUTH_TOKEN }}
           TWILIO_PHONE_NUMBER: ${{ secrets.TWILIO_PHONE_NUMBER }}
           SENDGRID_API_KEY:    ${{ secrets.SENDGRID_API_KEY }}
+          BREVO_API_KEY:       ${{ secrets.BREVO_API_KEY }}
+          BREVO_API_KEY_2:     ${{ secrets.BREVO_API_KEY_2 }}
+          BREVO_SMTP_LOGIN:    ${{ secrets.BREVO_SMTP_LOGIN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python3 scheduled_send.py --sms-limit ${{ github.event.inputs.sms_limit || '200' }} --email-limit ${{ github.event.inputs.email_limit || '50' }}
+
+      # A run that sends nothing must not report success. scheduled_send exits 0
+      # whether it sent 262 or 0, which is how a dead provider hid for weeks.
+      - name: Fail if nothing was sent
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          python3 - <<'PY'
+          import csv, datetime, pathlib, sys
+          p = pathlib.Path(f"send_log_{datetime.date.today().isoformat()}.csv")
+          if not p.exists():
+              print("No send log — nothing was attempted today."); sys.exit(0)
+          rows = list(csv.DictReader(p.open(newline="")))
+          sent = sum(1 for r in rows if r.get("status") == "sent")
+          failed = sum(1 for r in rows if r.get("status") == "failed")
+          print(f"sent={sent} failed={failed}")
+          if failed and not sent:
+              sys.exit(f"Every send failed ({failed}/{failed}). Provider is down — not reporting success.")
+          PY
 
       - name: Save zone state
         if: always()
