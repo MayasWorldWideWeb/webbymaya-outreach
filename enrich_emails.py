@@ -547,6 +547,13 @@ def parse_args():
         "--no-cache", action="store_true",
         help="Ignore the negative cache and re-look-up known-empty businesses",
     )
+    parser.add_argument(
+        "--max-minutes", type=float, default=0, metavar="M",
+        help="Stop enriching after M minutes and write what was found so far "
+             "(default: 0 = no limit). Enrichment has no natural ceiling — it "
+             "grows with the prospect pool — so in CI it would run until the "
+             "job timeout killed the whole run and nothing ever got sent.",
+    )
     return parser.parse_args()
 
 
@@ -634,20 +641,42 @@ def main():
             print(f"    ✓ {name} → {email}")
         return idx, email
 
+    # A partial enrichment that still sends beats a complete one that gets
+    # killed. The 08-10 CI run was cut off at 1435/1533 by the 45-minute job
+    # timeout, so check_bounces and the whole send step never ran at all.
+    import time as _time
+    deadline = (_time.monotonic() + args.max_minutes * 60) if args.max_minutes else None
+    stopped_early = 0
+
+    attempted = set()
+
     try:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = {pool.submit(enrich_one, i): i for i in to_enrich}
             for future in as_completed(futures):
                 idx, email = future.result()
                 prospects[idx]["email"] = email
+                attempted.add(idx)
+                if deadline and _time.monotonic() > deadline:
+                    for f, i in futures.items():
+                        if not f.done() and f.cancel():
+                            stopped_early += 1
+                    if stopped_early:
+                        print(f"\n  [budget] {args.max_minutes:g} min reached — "
+                              f"skipped {stopped_early} remaining lookup(s) so the "
+                              f"send step still runs. They retry tomorrow.")
+                    break
     finally:
         close_browser()
 
-    # Remember the misses so tomorrow's run doesn't repeat them.
+    # Remember the misses so tomorrow's run doesn't repeat them. Only ones that
+    # were actually looked up — a budget cut-off leaves the rest untouched, and
+    # caching those would blacklist businesses nobody ever searched for, for the
+    # full 60 days.
     if not args.no_cache:
         from datetime import datetime
         today = datetime.now().isoformat(timespec="seconds")
-        for idx in to_enrich:
+        for idx in sorted(attempted):
             if not prospects[idx].get("email", "").strip():
                 nm = _norm_business_name(prospects[idx].get("name", ""))
                 if nm:

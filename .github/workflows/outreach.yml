@@ -25,7 +25,10 @@ on:
 jobs:
   outreach:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Headroom over the 20-minute enrichment budget so a slow send still lands.
+    # This repo is public, so Actions minutes are free — the old 45 was cutting
+    # runs off mid-enrichment for no saving.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -76,7 +79,13 @@ jobs:
             # --all --search: this is a free cloud runner, so keep the full
             # yield here. ~95% of emails found come from the search fallback on
             # businesses that have no website of their own to scrape.
-            python3 enrich_emails.py --input "$CSV" --all --search
+            #
+            # --max-minutes: enrichment grows with the prospect pool and has no
+            # natural ceiling. On 08-10 it was still going at 1435/1533 when the
+            # 45-minute job timeout killed the run, so the send step never ran
+            # at all — same on 08-02 and 08-09. Cap it and send what we have;
+            # the leftovers are picked up tomorrow.
+            python3 enrich_emails.py --input "$CSV" --all --search --max-minutes 20
           else
             echo "No prospects CSV for today, skipping"
           fi
