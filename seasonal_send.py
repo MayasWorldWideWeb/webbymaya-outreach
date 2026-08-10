@@ -22,14 +22,15 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from batch_send_outreach import send_email, html_card, _ep, _ecta
+from batch_send_outreach import send_email, html_card, _ep, _ecta, clean_business_name
+from enrich_emails import _email_belongs_to_biz
 
 def _seasonal_html(hook: str, pitch: str, email: str = "") -> str:
     return html_card(
         _ep(hook)
         + _ep(pitch)
         + _ecta("", 'Reply <strong>&ldquo;show me&rdquo;</strong> and I\'ll send it right over.', dark=True)
-        + _ep("Starting at $499 &nbsp;&middot;&nbsp; Live in 7 days &nbsp;&middot;&nbsp; No monthly fees", muted=True, small=True),
+        + _ep("Starting at $499 &nbsp;&middot;&nbsp; Free domain + 1 year hosting included &nbsp;&middot;&nbsp; Live in 7 days", muted=True, small=True),
         email=email,
     )
 
@@ -272,6 +273,21 @@ def _load_opt_outs() -> set:
     return out
 
 
+def _load_suppressed() -> set:
+    """Real suppression list — bounced + UNSUBSCRIBED addresses (bounce_log.csv,
+    kept current by sync_unsubscribes.py). Must be honored or we re-mail opt-outs
+    (CAN-SPAM violation)."""
+    out = set()
+    p = SCRIPT_DIR / "bounce_log.csv"
+    if p.exists():
+        with open(p, newline="", encoding="utf-8", errors="replace") as f:
+            for row in csv.DictReader(f):
+                e = (row.get("email") or "").strip().lower()
+                if e:
+                    out.add(e)
+    return out
+
+
 def _load_all_leads() -> list:
     """Load enriched prospect CSVs (most recent first)."""
     leads = []
@@ -327,9 +343,10 @@ def main():
     already_sent     = _load_send_logs()
     already_seasonal = _load_seasonal_log()
     opt_outs         = _load_opt_outs()
+    suppressed       = _load_suppressed()      # bounces + unsubscribes (CAN-SPAM)
     leads            = _load_all_leads()
 
-    skip = already_sent | already_seasonal | opt_outs
+    skip = already_sent | already_seasonal | opt_outs | suppressed
     total_sent = 0
 
     for campaign, days_until in active:
@@ -339,6 +356,8 @@ def main():
             if _cat_match(l.get("category",""), campaign["categories"])
             and (l.get("email","") or "").strip().lower() not in skip
             and (l.get("email","") or "").strip()
+            and _email_belongs_to_biz((l.get("email","") or "").strip(),
+                                      l.get("name","") or l.get("business_name",""))
         ]
         print(f"[seasonal] {len(targets)} eligible leads for {campaign['label']}")
 
@@ -347,7 +366,7 @@ def main():
                 print(f"[seasonal] Hit limit ({args.limit}) — stopping.")
                 return
 
-            name     = lead.get("name","") or lead.get("business_name","")
+            name     = clean_business_name(lead.get("name","") or lead.get("business_name",""))
             email    = (lead.get("email","") or "").strip()
             category = lead.get("category","")
 

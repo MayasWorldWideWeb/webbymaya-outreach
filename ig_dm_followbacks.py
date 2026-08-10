@@ -4,7 +4,7 @@ ig_dm_followbacks.py — WebByMaya Instagram DM Follow-Backs
 When someone follows @webbymaya back, send them a friendly intro DM.
 Capped at 12/day. Never DMs the same person twice.
 """
-import json, random, sys, time
+import json, os, random, sys, time
 from datetime import date
 from pathlib import Path
 
@@ -19,7 +19,7 @@ MY_USER_ID  = "21435992045"   # @webbymaya
 # Rotate through 7 messages (one dominant angle per day of week)
 DM_TEMPLATES = [
     "Hey {name}! Thanks for the follow 🙌 I'm Maya — I build websites for Philly small businesses, starting at $499, live in 7 days. See what I can do for your business → webbymaya.com",
-    "Hi {name}! Appreciate the follow! I help local business owners get found on Google fast. Professional sites starting at $799, no monthly fees. Check it out: webbymaya.com",
+    "Hi {name}! Appreciate the follow! I help local business owners get found on Google fast. Professional sites starting at $499 — free domain + 1 year of hosting included. Check it out: webbymaya.com",
     "Hey {name} 👋 I'm Maya with WebByMaya. I build clean, fast websites for local businesses — $799, done in a week. If you're ever looking to get online, I've got you: webbymaya.com",
     "Hi {name}! Thanks for following! Quick question — do you have a website for your business? I help Philly business owners get found online starting at $799. See examples at webbymaya.com",
     "Hey {name}! Thanks for the follow 🙏 I'm Maya — web designer based in Philly. I build sites for local businesses so their customers can actually find them on Google. webbymaya.com — take a look!",

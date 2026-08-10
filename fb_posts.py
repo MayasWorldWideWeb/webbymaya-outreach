@@ -38,7 +38,7 @@ of the things I hear most is: "I didn't realize how many customers I was losing.
 If your business doesn't have a website (or your current one looks bad on phones), \
 people searching Google right now literally cannot find you.
 
-I build clean, mobile-ready sites for local Philly businesses. No monthly fees. \
+I build clean, mobile-ready sites for local Philly businesses — free domain + 1 year of hosting included. \
 Most sites go live in about a week.
 
 Free preview for any business in this group — I'll build it before you commit to \
@@ -78,7 +78,7 @@ does your name come up?
 If you don't have a website, the answer is no. And that means someone else is \
 getting that customer instead of you.
 
-I build websites specifically for local Philly businesses. starting at $499, no monthly fees, \
+I build websites specifically for local Philly businesses. Starting at $499 — free domain + 1 year of hosting included, \
 live in about a week.
 
 I also do a free mockup first — you see the whole site before paying anything.
@@ -88,7 +88,7 @@ Reply or comment if you want me to build a free preview for your business. 💪"
     },
     # Week 4: Value/differentiator angle
     {
-        "title": "What $799 gets you (Philly web designer, no monthly fees)",
+        "title": "What $799 gets you (Philly web designer)",
         "body": """\
 A lot of business owners think a professional website costs $3,000+/year with \
 ongoing monthly fees. I want to clear that up.
@@ -98,9 +98,9 @@ Here's what my Standard package includes for $799:
 ✓ Mobile-optimized — looks great on every phone
 ✓ Google Analytics so you can see your traffic
 ✓ SSL certificate (the padlock in the browser)
-✓ 1 year of hosting included
+✓ Free domain + 1 year of hosting included
 ✓ Live in about a week
-✓ No monthly fees — ever
+✓ Just $29/mo after year one to keep it live & maintained
 
 I also do a free mockup before you commit to anything.
 

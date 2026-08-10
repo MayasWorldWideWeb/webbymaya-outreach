@@ -2216,7 +2216,7 @@ let currentPhone = null;
 const TEMPLATES = [
   { keys: ["how much","price","cost","rate","charge","fee"],
     sms: "Sites start at $499 — design, mobile build, SEO setup, live in 7 days. Fill out my quick form and I'll send a full breakdown: webbymaya.com/book — Maya",
-    email: "Hi,\n\nSites start at $499 — that includes the full design, mobile-friendly build, basic SEO setup, and go-live within 7 days. No monthly fees.\n\nEverything's handled by email — fill out my intake form and I'll go over it all: webbymaya.com/book\n\n— Maya" },
+    email: "Hi,\n\nSites start at $499 — that includes the full design, mobile-friendly build, basic SEO setup, a free domain + 1 year of hosting, and go-live within 7 days. After the first free year, hosting & maintenance is just $29/mo.\n\nEverything's handled by email — fill out my intake form and I'll go over it all: webbymaya.com/book\n\n— Maya" },
 
   { keys: ["yes","interested","sure","sounds good","tell me more","go ahead","let's do","sign me up","definitely","absolutely","i want","i'd like","set it up"],
     sms: "That's great to hear! Fill out my quick intake form — takes 2 minutes and I'll get started: webbymaya.com/book — Maya",
@@ -2239,7 +2239,7 @@ const TEMPLATES = [
     email: "Hi,\n\nYou can see examples of my work at webbymaya.com.\n\nI can also put together a free mockup specifically for your business — no call needed, just reply 'yes' and I'll get started. Takes me about 20 minutes and you're under no obligation.\n\n— Maya" },
 
   { keys: ["too expensive","can't afford","cant afford","too much","budget","cheaper","discount","payment plan"],
-    sms: "Totally get it! I offer payment plans (2-3 months) and there's no monthly fee. One new customer usually covers the cost. Chat about options? webbymaya.com/book — Maya",
+    sms: "Totally get it! I offer payment plans (2-3 months), and your first year of domain + hosting is included ($29/mo after that). One new customer usually covers the cost. Chat about options? webbymaya.com/book — Maya",
     email: "Hi,\n\nI totally understand — $799 is an investment. A couple of options that might help:\n\n• Payment plans: split over 2-3 months, no interest\n• No ongoing monthly fees ever\n• For most businesses, just one new customer from the site covers the full cost\n\nHappy to talk through what works for you: webbymaya.com/book\n\n— Maya" },
 
   { keys: ["call me","phone","call you","give me a call","reach me","contact me"],

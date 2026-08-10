@@ -24,6 +24,11 @@ SCRIPT_DIR = Path(__file__).parent
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL  = "https://overpass-api.de/api/interpreter"
+OVERPASS_ENDPOINTS = [
+    OVERPASS_URL,
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.osm.jp/api/interpreter",
+]
 HEADERS       = {"User-Agent": "WebByMaya-Outreach/1.0 (mayas.worldwide.web@gmail.com)"}
 
 ZONE_LOCATIONS = {
@@ -57,7 +62,7 @@ ZONE_LOCATIONS = {
     "pa-berks-reading":      "Reading, PA",
     "pa-berks-north":        "Kutztown, PA",
     "pa-lehigh-allentown":   "Allentown, PA",
-    "pa-lehigh-bethlehem":   "Bethlehem, PA",
+    "pa-lehigh-bethlehem":   "Bethlehem, Northampton County, PA",
     "pa-northampton-easton": "Easton, PA",
     "pa-york-city":          "York, PA",
     "pa-york-east":          "Red Lion, PA",
@@ -65,6 +70,41 @@ ZONE_LOCATIONS = {
     "pa-dauphin-east":       "Hershey, PA",
     "pa-lebanon":            "Lebanon, PA",
     "pa-schuylkill":         "Pottsville, PA",
+    "pa-stroudsburg":        "Stroudsburg, PA",
+    "pa-wilkes-barre":       "Wilkes-Barre, PA",
+    "pa-scranton":           "Scranton, PA",
+    "md-baltimore-inner":    "Baltimore, MD",
+    "md-baltimore-north":    "Towson, MD",
+    "md-baltimore-east":     "Essex, MD",
+    "md-baltimore-west":     "Catonsville, MD",
+    "md-baltimore-south":    "Glen Burnie, MD",
+    "md-annapolis":          "Annapolis, MD",
+    "md-columbia":           "Columbia, MD",
+    "md-ellicott-city":      "Ellicott City, MD",
+    "md-bel-air":            "Bel Air, Harford County, MD",
+    "md-dundalk":            "Dundalk, MD",
+    "md-rockville":          "Rockville, MD",
+    "md-silver-spring":      "Silver Spring, MD",
+    "sj-atlantic-city":      "Atlantic City, NJ",
+    "sj-vineland":           "Vineland, NJ",
+    "sj-millville":          "Millville, NJ",
+    "sj-bridgeton":          "Bridgeton, NJ",
+    "sj-pleasantville":      "Pleasantville, Atlantic County, NJ",
+    "sj-somers-point":       "Somers Point, NJ",
+    "sj-hammonton":          "Hammonton, NJ",
+    "sj-medford":            "Medford, Burlington County, NJ",
+    "sj-marlton":            "Marlton, NJ",
+    "sj-turnersville":       "Turnersville, NJ",
+    "sj-washington-twp":     "Washington Township, Gloucester County, NJ",
+    "nj-trenton":            "Trenton, NJ",
+    "nj-hamilton":           "Hamilton Township, Mercer County, NJ",
+    "nj-princeton":          "Princeton, NJ",
+    "nj-new-brunswick":      "New Brunswick, NJ",
+    "nj-edison":             "Edison, NJ",
+    "de-middletown":         "Middletown, DE",
+    "de-milford":            "Milford, DE",
+    "de-seaford":            "Seaford, DE",
+    "de-rehoboth":           "Rehoboth Beach, DE",
 }
 
 # OSM tag → friendly category name
@@ -134,17 +174,26 @@ def overpass_query(s: float, w: float, n: float, e: float) -> list[dict]:
 );
 out center body;
 """
-    req = urllib.request.Request(
-        OVERPASS_URL,
-        data=urllib.parse.urlencode({"data": ql}).encode(),
-        headers=HEADERS,
-    )
-    try:
-        resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
-        return resp.get("elements", [])
-    except Exception as e:
-        print(f"  [WARN] Overpass query failed: {e}")
-        return []
+    # Overpass is the primary finder now that the Yelp key is dead, and the public
+    # instances routinely 504 under load. A single failed call used to yield a
+    # silent zero-prospect day, so try each mirror with backoff before giving up.
+    payload = urllib.parse.urlencode({"data": ql}).encode()
+    last_err = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(endpoint, data=payload, headers=HEADERS)
+                resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
+                elements = resp.get("elements", [])
+                if endpoint != OVERPASS_ENDPOINTS[0] or attempt:
+                    print(f"  [ok] Overpass succeeded via {endpoint} (attempt {attempt + 1})")
+                return elements
+            except Exception as e:
+                last_err = e
+                print(f"  [WARN] Overpass {endpoint} attempt {attempt + 1}/3 failed: {e}")
+                time.sleep(5 * (attempt + 1))
+    print(f"  [WARN] Overpass query failed on all mirrors: {last_err}")
+    return []
 
 
 def get_category(tags: dict) -> str:

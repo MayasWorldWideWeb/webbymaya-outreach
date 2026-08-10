@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import timezone, timedelta
-from batch_send_outreach import html_card, _ep, _ecta
+from batch_send_outreach import html_card, _ep, _ecta, send_email as _multi_send, normalize_category, clean_business_name
 from pathlib import Path
 
 SCRIPT_DIR       = Path(__file__).parent
@@ -97,7 +97,7 @@ def _html_plain(name: str, email: str = "") -> str:
         _ep(f"I saw you opened my email about building a website for <strong>{name}</strong> — wanted to follow up.")
         + _ep("I'd love to build you a <strong>free preview</strong> so you can see exactly what your site could look like before committing to anything.")
         + _ecta("", f'Just reply <span style="color:#C9A96E;">YES</span> and I\'ll send one over the same day.', dark=True)
-        + _ep("Starting at $499 &nbsp;&middot;&nbsp; Live in 7 days &nbsp;&middot;&nbsp; No monthly fees", muted=True, small=True),
+        + _ep("Starting at $499 &nbsp;&middot;&nbsp; Free domain + 1 year hosting included &nbsp;&middot;&nbsp; Live in 7 days", muted=True, small=True),
         email=email,
     )
 
@@ -115,7 +115,39 @@ BOT_DOMAINS = {
     "fresha.com","birdeye.com","yelp.com","yext.com","thryv.com",
     "grubhub.com","doordash.com","ubereats.com","opentable.com",
     "squareup.com","toasttab.com",
+    # Hand-verified enrichment mismatches (2026-07-16 audit)
+    "woodcrestrehab.com","myprestige.com","absolute.com","eatandys.com",
+    "essex.ac.uk","fiestatableware.com","hickoryhardware.com",
+    "thewesleycommunity.org","anchorcolumbus.com","totalwaterlabs.com",
+    "gocurb.com","starr-restaurant.com","wfxg.com","orient-express.com",
+    "mountlaurel.com","mavistire.com","mossbuildinganddesign.com",
+    "times.co.sz","falconexp.com","phillymag.com","kcrg.com","simon.com",
+    "moatable.com","schulson.com","ci.camden.nj.us","crackerbarrel.com",
+    "alexanderwang.com","jae.com","visitbuckscounty.com","sila.org",
+    "expertise.com","joe.com","harvestseasonal.com","rowcal.com",
+    "corcoran.com","keystonetech.com","downtownfreehold.com",
+    "endlessllp.com","capellisport.com","andersontownship.org",
 }
+
+# Inbox prefixes that are never a buying contact (hiring, legal, transactional…)
+ROLE_PREFIX_BLOCKLIST = {
+    "jobs","careers","hr","recruiting","dmca","abuse","legal","privacy",
+    "security","press","media","postmaster","noreply","no-reply","unsubscribe",
+    "billing","myaccount","mayor","subscriptions","programming","bugreport",
+}
+
+
+def _blocked_email(email_addr: str) -> bool:
+    """True if this address should never get outreach (bot domain, role inbox,
+    or institutional TLD — .edu/.gov/.mil/.ac.xx are always enrichment errors)."""
+    local, _, domain = email_addr.partition("@")
+    if domain in BOT_DOMAINS:
+        return True
+    if local.lower() in ROLE_PREFIX_BLOCKLIST:
+        return True
+    if domain.endswith((".edu", ".gov", ".mil")) or ".ac." in domain or ".gov." in domain:
+        return True
+    return False
 
 
 # ── Mockup auto-generator ─────────────────────────────────────────────────────
@@ -139,6 +171,9 @@ def try_generate_mockup(name: str, email_addr: str, lead_row: dict):
         sys.path.insert(0, str(SCRIPT_DIR))
         import generate_mockup as gm
         category = lead_row.get("category", "").strip() if lead_row else ""
+        # Stored categories are often the search term, not the business type
+        # (e.g. a bakery found during a "nail salon" sweep) — re-derive from name
+        category = normalize_category(name, category)
         phone    = lead_row.get("phone", "").strip()    if lead_row else ""
         address  = lead_row.get("address", "").strip()  if lead_row else ""
         if "@" in phone:   # phone column sometimes holds email fallback
@@ -195,73 +230,93 @@ def _gmail_token() -> str:
 
 
 def send_email(to: str, subject: str, plain: str, html: str) -> bool:
-    # Try Gmail OAuth first
-    access = _gmail_token()
-    if access:
-        try:
-            msg = email.mime.multipart.MIMEMultipart("alternative")
-            msg["To"]      = to
-            msg["From"]    = f"{SENDER_NAME} <{SENDER_EMAIL}>"
-            msg["Subject"] = subject
-            msg.attach(email.mime.text.MIMEText(plain, "plain"))
-            msg.attach(email.mime.text.MIMEText(html,  "html"))
-            raw     = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-            payload = json.dumps({"raw": raw}).encode()
-            req = urllib.request.Request(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                data=payload,
-                headers={"Authorization": f"Bearer {access}",
-                         "Content-Type": "application/json"},
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=10)
-            return True
-        except urllib.error.HTTPError as e:
-            print(f"  [GMAIL ERROR] {e.code} — falling back to SendGrid")
-        except Exception as exc:
-            print(f"  [GMAIL ERROR] {exc} — falling back to SendGrid")
-
-    # Fallback: SendGrid
-    if SG:
-        try:
-            body = json.dumps({
-                "personalizations": [{"to": [{"email": to}]}],
-                "from":    {"email": SENDER_EMAIL, "name": SENDER_NAME},
-                "subject": subject,
-                "content": [
-                    {"type": "text/plain", "value": plain},
-                    {"type": "text/html",  "value": html},
-                ],
-            }).encode()
-            req = urllib.request.Request(
-                "https://api.sendgrid.com/v3/mail/send",
-                data=body, method="POST",
-                headers={"Authorization": f"Bearer {SG}",
-                         "Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=10)
-            return True
-        except Exception as e:
-            print(f"  [SENDGRID ERROR] {e}")
-
-    print("  [ERROR] No sender available (no Gmail token, no SendGrid key)")
-    return False
+    """Send via the shared multi-provider chain (Brevo → Brevo2 → SendGrid →
+    SendPulse → Mailgun → Gmail). Previously this was SendGrid+Gmail only, which
+    failed en masse once SendGrid hit its 100/day cap."""
+    ok, provider = _multi_send(to, subject, plain, html)
+    if ok:
+        print(f"  Sent via {provider} → {to}.")
+    else:
+        print(f"  [ERROR] All providers failed for {to}.")
+    return ok
 
 
 # ── SendGrid clicker fetch ────────────────────────────────────────────────────
 
+BREVO_KEYS = [k for k in (os.environ.get("BREVO_API_KEY", ""),
+                          os.environ.get("BREVO_API_KEY_2", "")) if k]
+
+
+def _brevo_events(key: str, event: str) -> list[dict]:
+    """One page of Brevo transactional events (clicks/opened) for one account."""
+    req = urllib.request.Request(
+        f"https://api.brevo.com/v3/smtp/statistics/events?limit=5000&days={MAX_DAYS}&event={event}",
+        headers={"api-key": key, "accept": "application/json"})
+    return json.loads(urllib.request.urlopen(req, timeout=60).read()).get("events") or []
+
+
+def fetch_brevo_clickers(cutoff) -> list[dict]:
+    """Pull click events from Brevo (both accounts) — most sends go out via
+    Brevo since the 2026-06 provider reorder, so SendGrid alone misses them."""
+    clicks: dict[str, dict] = {}   # email → {count, last_time}
+    opens:  dict[str, int]  = {}   # email → open count
+    for key in BREVO_KEYS:
+        for kind in ("clicks", "opened"):
+            try:
+                events = _brevo_events(key, kind)
+            except Exception as e:
+                print(f"[WARN] Brevo {kind} fetch failed: {e}")
+                continue
+            for ev in events:
+                em = (ev.get("email") or "").lower().strip()
+                if not em or "@" not in em:
+                    continue
+                try:
+                    ts = datetime.datetime.fromisoformat(
+                        ev.get("date", "").replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if kind == "opened":
+                    opens[em] = opens.get(em, 0) + 1
+                else:
+                    c = clicks.setdefault(em, {"count": 0, "last_time": ts})
+                    c["count"] += 1
+                    if ts > c["last_time"]:
+                        c["last_time"] = ts
+
+    results = []
+    for em, c in clicks.items():
+        if _blocked_email(em):
+            continue
+        n_opens = opens.get(em, 0)
+        # High clicks + zero opens = link scanner bot (same rule as SendGrid path)
+        if c["count"] >= 4 and n_opens == 0:
+            continue
+        if c["last_time"] < cutoff:
+            continue
+        results.append({
+            "email":      em,
+            "name":       "",  # filled in from send log by fetch_clickers()
+            "click_time": c["last_time"],
+            "clicks":     c["count"],
+            "opens":      n_opens,
+        })
+    return results
+
+
 def fetch_clickers() -> list[dict]:
-    """Pull recent emails from SendGrid that have at least 1 click."""
+    """Pull recent emails with at least 1 click — SendGrid + Brevo merged."""
+    msgs = []
     if not SG:
         print("[ERROR] SENDGRID_API_KEY not set")
-        return []
-    try:
-        req  = urllib.request.Request(
-            "https://api.sendgrid.com/v3/messages?limit=1000",
-            headers={"Authorization": f"Bearer {SG}"})
-        msgs = json.loads(urllib.request.urlopen(req, timeout=15).read()).get("messages", [])
-    except Exception as e:
-        print(f"[ERROR] SendGrid fetch failed: {e}")
-        return []
+    else:
+        try:
+            req  = urllib.request.Request(
+                "https://api.sendgrid.com/v3/messages?limit=1000",
+                headers={"Authorization": f"Bearer {SG}"})
+            msgs = json.loads(urllib.request.urlopen(req, timeout=60).read()).get("messages", [])
+        except Exception as e:
+            print(f"[ERROR] SendGrid fetch failed: {e}")  # continue — Brevo below
 
     now     = datetime.datetime.now(timezone.utc)
     cutoff  = now - timedelta(days=MAX_DAYS)
@@ -275,8 +330,7 @@ def fetch_clickers() -> list[dict]:
         if not email_addr or "@" not in email_addr:
             continue
 
-        domain = email_addr.split("@")[-1]
-        if domain in BOT_DOMAINS:
+        if _blocked_email(email_addr):
             continue
 
         opens  = m.get("opens_count", 0)
@@ -303,6 +357,9 @@ def fetch_clickers() -> list[dict]:
             "opens":      opens,
         })
 
+    # Merge in Brevo click events (primary send provider since 2026-06)
+    results.extend(fetch_brevo_clickers(cutoff))
+
     # Dedupe — keep most recent click per email
     seen: dict[str, dict] = {}
     for r in results:
@@ -321,7 +378,7 @@ def fetch_clickers() -> list[dict]:
                         em = row.get("email_sent_to", "").lower().strip()
                         if em and em not in email_to_biz:
                             email_to_biz[em] = {
-                                "name":     row.get("name", ""),
+                                "name":     clean_business_name(row.get("name", "")),
                                 "category": row.get("category", ""),
                             }
         except Exception:
@@ -334,6 +391,11 @@ def fetch_clickers() -> list[dict]:
         name = biz.get("name", "")
         if not name:
             continue  # skip if not in send log — not a prospect we contacted
+        # Sanitize scraped names: strip stray HTML tags, fix ALL-CAPS shouting
+        name = re.sub(r"<[^>]+>", "", name)
+        name = re.sub(r"\s+", " ", name).strip()
+        if name.isupper():
+            name = name.title()
         # Domain mismatch check: ≥1 word (3+ chars) from biz name must appear in email domain
         biz_words = set(re.findall(r"[a-z]{3,}", name.lower()))
         domain    = em.split("@")[-1].split(".")[0]  # e.g. "rittenhousehotel"
@@ -444,7 +506,7 @@ def main():
                     import sys as _sys
                     _sys.path.insert(0, str(SCRIPT_DIR))
                     from generate_intake_form import upload_intake_form
-                    cat = (lead_row or {}).get("category", "")
+                    cat = normalize_category(name, (lead_row or {}).get("category", ""))
                     intake_url = upload_intake_form(name, cat, mockup_url)
                     print(f"  Intake form : {intake_url}")
                 except Exception as _e:

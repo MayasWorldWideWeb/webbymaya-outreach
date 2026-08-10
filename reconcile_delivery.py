@@ -35,9 +35,11 @@ def _brevo_report(key: str) -> dict:
     if not key:
         return {}
     try:
+        # Brevo's Cloudflare rejects Python's default User-Agent (error 1010).
         req = urllib.request.Request(
             "https://api.brevo.com/v3/smtp/statistics/aggregatedReport?days=1",
-            headers={"api-key": key, "accept": "application/json"})
+            headers={"api-key": key, "accept": "application/json",
+                     "User-Agent": "curl/8.4.0"})
         return json.loads(urllib.request.urlopen(req, timeout=25).read())
     except Exception as e:
         return {"_err": str(e)}
@@ -55,6 +57,18 @@ def main():
 
     b1 = _brevo_report(_key("BREVO_API_KEY"))
     b2 = _brevo_report(_key("BREVO_API_KEY_2"))
+
+    # If Brevo could not be reached, "delivered" is unknown — NOT zero. Treating
+    # an unreachable API as zero deliveries fires a SILENT SEND FAILURE alert on
+    # any network blip, and an alarm that cries wolf is an alarm she stops
+    # reading. Skip the check instead and say so.
+    unreachable = [n for n, b in (("brevo1", b1), ("brevo2", b2)) if "_err" in b]
+    if unreachable:
+        errs = "; ".join(f"{n}: {(b1 if n == 'brevo1' else b2)['_err']}" for n in unreachable)
+        print(f"Delivery reconcile {today}: SKIPPED — could not reach {', '.join(unreachable)} "
+              f"({errs}). Delivery is unknown, not zero.")
+        return
+
     delivered = (b1.get("delivered", 0) or 0) + (b2.get("delivered", 0) or 0)
     errors    = (b1.get("error", 0) or 0) + (b2.get("error", 0) or 0)
     bounces   = (b1.get("hardBounces", 0) or 0) + (b2.get("hardBounces", 0) or 0)

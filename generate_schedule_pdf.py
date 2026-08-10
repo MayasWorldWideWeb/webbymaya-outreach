@@ -269,7 +269,7 @@ POSTS = [
         "image": "FAQ (repeat)",
         "caption": (
             "Still on the fence about a website? Let me break it down.\n\n"
-            "- Cost: starting at $499 — no monthly fees to me\n"
+            "- Cost: starting at $499 — free domain + 1 year of hosting included ($29/mo after year one)\n"
             "- Time: 7 days from start to live\n"
             "- Ownership: Your domain, your hosting, yours forever\n"
             "- Results: Shows up on Google, works on phones\n\n"
@@ -341,7 +341,7 @@ POSTS = [
         "caption": (
             "July is here. New month, fresh start.\n\n"
             "If getting a website has been on your list — this is your sign.\n\n"
-            "Starting at $499. Live in 7 days. No monthly fees.\n\n"
+            "Starting at $499. Live in 7 days. Free domain + 1 year of hosting included ($29/mo after year one).\n\n"
             "Fill out my intake form → link in bio\n\n"
             "#PhillySmallBusiness #WebDesign #NewMonth #SmallBusiness #WebbyMaya"
         ),

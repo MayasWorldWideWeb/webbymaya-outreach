@@ -2,11 +2,14 @@
 """
 form_responder.py — Instant auto-response to webbymaya.com/book form submissions.
 
-Polls Supabase `mockup_inquiries` for new rows where responded_at IS NULL.
-For each unresponded submission:
+Polls Supabase `contact_messages` for new rows where replied_at IS NULL.
+For each unanswered submission:
   1. Generates a personalized mockup and uploads it to Supabase storage
   2. Sends a reply email with the mockup preview + pricing
-  3. Marks the row responded_at = now() so it's never re-sent
+  3. Marks the row replied_at = now() so it's never re-sent
+
+Requires a service-role key for the site's CURRENT project (see SITE_ENV); the
+anon key is subject to RLS and will silently return zero pending submissions.
 
 Designed to run every 15 minutes via launchd (see setup at bottom of file).
 Also called once per daily run from run_daily.sh as a safety net.
@@ -34,16 +37,55 @@ TOKEN_PATH   = Path.home() / ".webbymaaya/gmail_token.json"
 SENDER_EMAIL = "maya@webbymaya.com"
 SENDER_NAME  = "Maya Sierra"
 
-SUPABASE_URL    = "https://ycsauzlqsjjbusugshpz.supabase.co"
-SUPABASE_ANON   = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-    ".eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5NTAzOTMxNH0"
-    "._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI"
-)
-SUPABASE_SERVICE = os.environ.get("SUPABASE_SERVICE_KEY", "")
+# The live site's Supabase project. Read from the site's own .env so this can
+# never drift out of sync with what the website actually writes to — it already
+# did once: this script polled the retired project `ycsauzlqsjjbusugshpz` (and a
+# table that no longer exists there) while the site wrote to the current one.
+SITE_ENV = Path.home() / "Projects/maya-studio-shine/.env"
 
-# Use service key for writes if available, anon for reads
-_READ_KEY  = SUPABASE_ANON
+# Inbound submissions land here. `mockup_inquiries` was the old project's table.
+INQUIRY_TABLE = "contact_messages"
+
+
+def _read_site_env() -> dict:
+    vals = {}
+    if SITE_ENV.exists():
+        for line in SITE_ENV.read_text().splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                k, v = line.split("=", 1)
+                vals[k.strip()] = v.strip().strip('"').strip("'")
+    return vals
+
+
+def _jwt_ref(token: str) -> str:
+    """Project ref a Supabase JWT belongs to ('' if it isn't one)."""
+    import base64 as _b64
+    import json as _json
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return _json.loads(_b64.urlsafe_b64decode(payload)).get("ref", "")
+    except Exception:
+        return ""
+
+
+_env = _read_site_env()
+SUPABASE_PROJECT = _env.get("VITE_SUPABASE_PROJECT_ID") or _env.get("SUPABASE_PROJECT_ID", "")
+SUPABASE_URL     = _env.get("VITE_SUPABASE_URL") or _env.get("SUPABASE_URL", "")
+SUPABASE_ANON    = _env.get("VITE_SUPABASE_PUBLISHABLE_KEY") or _env.get("SUPABASE_PUBLISHABLE_KEY", "")
+SUPABASE_SERVICE = os.environ.get("SUPABASE_SERVICE_KEY", "") or _env.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+# A key for a different project authenticates fine and then 403s on every table,
+# which reads like a permissions problem and sends you hunting for GRANTs. Check
+# the ref instead of guessing.
+if SUPABASE_SERVICE and SUPABASE_PROJECT and _jwt_ref(SUPABASE_SERVICE) != SUPABASE_PROJECT:
+    print(f"[warn] SUPABASE_SERVICE_ROLE_KEY belongs to project "
+          f"'{_jwt_ref(SUPABASE_SERVICE)}' but the site is on '{SUPABASE_PROJECT}' — ignoring it.")
+    SUPABASE_SERVICE = ""
+
+# Reads need to see every submission, so they need the service role; the anon key
+# is subject to RLS and will quietly return an empty list.
+_READ_KEY  = SUPABASE_SERVICE or SUPABASE_ANON
 _WRITE_KEY = SUPABASE_SERVICE or SUPABASE_ANON
 
 
@@ -424,8 +466,9 @@ def main():
     args = p.parse_args()
 
     rows = _sb_get(
-        "mockup_inquiries",
-        {"responded_at": "is.null", "select": "id,created_at,business_name,name,email,message"},
+        INQUIRY_TABLE,
+        {"replied_at": "is.null",
+         "select": "id,created_at,name,email,message,project_type"},
     )
 
     pending = [r for r in rows if r.get("email")]
@@ -437,8 +480,10 @@ def main():
     for i, row in enumerate(pending):
         row_id        = row["id"]
         email_addr    = row["email"].strip().lower()
-        business_name = (row.get("business_name") or "").strip()
+        # contact_messages has no business_name column — the submitter's name is
+        # the only thing to personalise the preview with.
         submitter     = (row.get("name") or "").strip()
+        business_name = submitter
         message       = (row.get("message") or "").strip()
         created       = row.get("created_at", "")[:16]
 
@@ -470,8 +515,9 @@ def main():
         ok = send_email(email_addr, subject, plain, html)
         if ok:
             print("  Sent.")
-            _sb_patch("mockup_inquiries", row_id, {
-                "responded_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            _sb_patch(INQUIRY_TABLE, row_id, {
+                "replied_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "replied_by": "form_responder",
             })
         else:
             print("  Failed to send.")

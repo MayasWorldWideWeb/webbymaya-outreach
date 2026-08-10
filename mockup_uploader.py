@@ -7,8 +7,28 @@ Image strategy:
   2. Fallback: picsum.photos (Lorem Picsum) — reliable, beautiful, no API key needed
   Never uses loremflickr (unreliable).
 """
-import hashlib, json, os, re, urllib.request, urllib.error
+import hashlib, json, os, re, shutil, urllib.request, urllib.error
 from pathlib import Path
+import offer  # single source of truth for price + what's-included copy
+
+# Where preview lead forms post. Read from the live site's own .env so a project
+# migration can't strand it again — every published preview pointed at a retired
+# project for months and silently dropped every lead it captured.
+_SITE_ENV = Path.home() / "Projects/maya-studio-shine/.env"
+
+
+def _lead_endpoint() -> tuple:
+    vals = {}
+    if _SITE_ENV.exists():
+        for line in _SITE_ENV.read_text().splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                k, v = line.split("=", 1)
+                vals[k.strip()] = v.strip().strip('"').strip("'")
+    url = vals.get("VITE_SUPABASE_URL") or vals.get("SUPABASE_URL", "")
+    key = vals.get("VITE_SUPABASE_PUBLISHABLE_KEY") or vals.get("SUPABASE_PUBLISHABLE_KEY", "")
+    if not url or not key:
+        raise SystemExit(f"Cannot build preview lead form: no Supabase URL/anon key in {_SITE_ENV}")
+    return f"{url}/rest/v1/contact_messages", key
 
 SUPABASE_URL = "https://ycsauzlqsjjbusugshpz.supabase.co"
 SERVICE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTQ2MzMxNCwiZXhwIjoyMDk1MDM5MzE0fQ.0qJY5I3THWHxPVVM49D8Ov1pmH91gMYb5bIXOOKJy1c"
@@ -641,6 +661,102 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
+import colorsys
+
+def _business_seed(name: str) -> int:
+    return int(hashlib.md5((name or "biz").encode("utf-8")).hexdigest(), 16)
+
+
+def _vary_color(hex_color: str, hue_delta: float, light_delta: float = 0.0) -> str:
+    """Deterministically shift a hex color's hue/lightness per business, so two
+    same-category sites don't share the identical palette (the #1 'obvious template'
+    tell). Same name → same colors every time."""
+    h = (hex_color or "").lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    try:
+        r, g, b = (int(h[i:i+2], 16) / 255 for i in (0, 2, 4))
+        hh, ll, ss = colorsys.rgb_to_hls(r, g, b)
+        hh = (hh + hue_delta) % 1.0
+        ll = min(0.92, max(0.06, ll + light_delta))
+        r, g, b = colorsys.hls_to_rgb(hh, ll, ss)
+        return "#%02X%02X%02X" % (round(r * 255), round(g * 255), round(b * 255))
+    except Exception:
+        return hex_color
+
+
+# Template/AI-cliché phrases that make copy read as generated — scrubbed to plainer,
+# human-sounding wording so mockups don't feel machine-made.
+_CLICHES = [
+    (r"\bone-stop\s+shop\b", "go-to spot"),
+    (r"\bone-stop\b", "go-to"),
+    (r"\belevate\b", "improve"),
+    (r"\bunlock\b", "open up"),
+    (r"\bnestled\b", "located"),
+    (r"experience the difference", "see the difference for yourself"),
+    (r"take your [a-z ]+? to the next level", "help your business grow"),
+    (r"\bworld-class\b", "top-quality"),
+    (r"\bunparalleled\b", "outstanding"),
+    (r"\bcutting-edge\b", "modern"),
+    (r"\bstate-of-the-art\b", "modern"),
+    (r"\bseamless(ly)?\b", "easy"),
+]
+
+
+def _scrub_cliches(text: str) -> str:
+    if not text:
+        return text
+    out = text
+    for pat, rep in _CLICHES:
+        out = re.sub(pat, rep, out, flags=re.IGNORECASE)
+    return out
+
+
+def _fetch_site_images(website: str) -> dict:
+    """Best-effort real logo + hero photo from the business's OWN website, so the
+    mockup shows THEIR branding instead of stock (the biggest 'she made me MY site'
+    signal). Never raises — returns {} on any issue so generation always falls back
+    to stock. Only fires when a website is known (no-website leads keep stock)."""
+    out = {}
+    if not website or not website.startswith("http"):
+        return out
+    try:
+        import urllib.request
+        from urllib.parse import urljoin
+        req = urllib.request.Request(website, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/537.36"})
+        html = urllib.request.urlopen(req, timeout=6).read(700000).decode("utf-8", "replace")
+
+        def _abs(u):
+            return urljoin(website, u.strip()) if u else ""
+
+        # Hero = og:image (the site's own representative photo), either attr order.
+        m = (re.search(r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)', html, re.I)
+             or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:image["\']', html, re.I))
+        if m:
+            out["hero"] = _abs(m.group(1))
+
+        # Logo = apple-touch-icon (usually a clean square) → else an <img> tagged "logo".
+        m = re.search(r'<link[^>]+rel=["\'][^"\']*apple-touch-icon[^"\']*["\'][^>]+href=["\']([^"\']+)', html, re.I)
+        if m:
+            out["logo"] = _abs(m.group(1))
+        else:
+            m = re.search(r'<img[^>]*\b(?:class|id|alt|src)=["\'][^"\']*logo[^"\']*["\'][^>]*>', html, re.I)
+            if m:
+                s = re.search(r'\bsrc=["\']([^"\']+)', m.group(0))
+                if s:
+                    out["logo"] = _abs(s.group(1))
+    except Exception:
+        return {}
+
+    # Drop anything unusable so we cleanly fall back to stock.
+    for k in list(out):
+        v = out[k]
+        if not v or v.startswith("data:") or v.lower().endswith(".svg"):
+            out.pop(k, None)
+    return out
+
+
 def _cat(category: str) -> dict:
     cat = (category or "").lower().strip()
     for k, t in CATS.items():
@@ -864,14 +980,19 @@ def generate_html_online(
     phone: str = "",
     city: str = "Philadelphia, PA",
     address: str = "",
+    website: str = "",
 ) -> str:
     theme      = _cat(category)
-    accent     = theme["accent"]
-    dark       = theme["dark"]
+    # Per-business palette shift so two same-category sites never look identical.
+    _seed      = _business_seed(name)
+    _hue_d     = ((_seed % 1000) / 1000.0 - 0.5) * 0.14      # ~±25° hue
+    _lt_d      = (((_seed >> 11) % 100) / 100.0 - 0.5) * 0.05
+    accent     = _vary_color(theme["accent"], _hue_d, _lt_d)
+    dark       = _vary_color(theme["dark"], _hue_d, _lt_d)
     bg         = theme["bg"]
     tag        = theme["tag"]
-    tagline    = theme["tagline"]
-    services   = theme["services"]
+    tagline    = _scrub_cliches(theme["tagline"])
+    services   = [(ic, ti, _scrub_cliches(de)) for (ic, ti, de) in theme["services"]]
     included   = theme["included"]
     reviews    = theme["reviews"]
     biz_slug   = _slug(name)
@@ -885,8 +1006,27 @@ def generate_html_online(
     # Escape for safe embedding in JS single-quoted strings
     name_js    = name.replace("\\", "\\\\").replace("'", "\\'")
     cat_js     = (category or "").replace("'", "\\'")
+    lead_endpoint, lead_anon_key = _lead_endpoint()
 
     hero_url, g1_url, g2_url, g3_url, video_url = _get_images(category, biz_slug, name)
+
+    # Use the business's OWN photo/logo when they have a site — falls back to stock.
+    _real = _fetch_site_images(website)
+    if _real.get("hero"):
+        hero_url  = _real["hero"]
+        video_url = ""            # show their real photo, not a generic stock video
+    real_logo = _real.get("logo", "")
+    _n0 = name.split()[0]
+    _n1 = "".join(name.split()[1:]) or ""
+    if real_logo:
+        nav_logo_html    = (f'<img src="{real_logo}" alt="{name}" '
+                            f'style="height:34px;width:auto;max-width:190px;object-fit:contain;vertical-align:middle">')
+        footer_logo_html = (f'<img src="{real_logo}" alt="{name}" '
+                            f'style="height:28px;width:auto;max-width:170px;object-fit:contain;opacity:.9">')
+    else:
+        nav_logo_html    = f'{_n0}<em>{_n1}</em>'
+        footer_logo_html = f'{_n0}<em>{_n1}</em>'
+
     video_tag = (
         f'<video class="hero-vid" id="heroVid" autoplay muted loop playsinline poster="{hero_url}">'
         f'<source src="{video_url}" type="video/mp4"></video>'
@@ -1177,7 +1317,7 @@ footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
 
 <!-- NAV -->
 <nav id="nav">
-  <div class="nav-logo">{name.split()[0]}<em>{"".join(name.split()[1:]) or ""}</em></div>
+  <div class="nav-logo">{nav_logo_html}</div>
   <div class="nav-links">
     <a href="#services">Services</a>
     <a href="#gallery">Gallery</a>
@@ -1234,21 +1374,24 @@ footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
     <div>
       <p class="eyebrow" data-reveal>Your New Website Includes</p>
       <h2 data-reveal>Everything You Need to Get Found Online</h2>
-      <p class="section-sub" data-reveal>No hidden fees, no monthly charges. One flat price — ready to launch in 7 days.</p>
+      <p class="section-sub" data-reveal>Includes a <strong>free domain</strong> and <strong>1 full year of hosting</strong> — ready to launch in 7 days. After year one, hosting &amp; maintenance is just {offer.MONTHLY}.</p>
       <div class="incl-grid" data-reveal>{incl_html}</div>
     </div>
     <div class="price-card" data-reveal>
-      <div class="price-badge">Starting at $499 — No Monthly Fees</div>
-      <div class="price-amount">$499</div>
-      <div class="price-label">One-time price &nbsp;·&nbsp; No surprises</div>
+      <div class="price-badge">{offer.PRICE} · Free Domain + 1 Year Hosting</div>
+      <div class="price-amount" data-offer="price">{offer.PRICE}</div>
+      <div class="price-label">One-time build &nbsp;·&nbsp; Free domain + hosting, year one</div>
       <div class="price-features">
+        <div class="price-feature"><span>✓</span> Free domain — first year on us</div>
+        <div class="price-feature"><span>✓</span> Free hosting — first year on us</div>
         <div class="price-feature"><span>✓</span> Custom design for your business</div>
         <div class="price-feature"><span>✓</span> Mobile-ready & fast loading</div>
-        <div class="price-feature"><span>✓</span> Google-optimized (SEO)</div>
-        <div class="price-feature"><span>✓</span> Live in 7 days</div>
-        <div class="price-feature"><span>✓</span> 30-day support included</div>
+        <div class="price-feature"><span>✓</span> Google-optimized (SEO), SSL secured</div>
+        <div class="price-feature"><span>✓</span> Live in 7 days · 30-day support</div>
+        <div class="price-feature"><span>✓</span> Then just {offer.MONTHLY} to keep it live &amp; maintained</div>
       </div>
-      <a href="#get-started" class="btn-primary" style="display:flex;justify-content:center">I Want This Site →</a>
+      <a href="{offer.CHECKOUT_URL}" data-offer-href="checkout" class="btn-primary" style="display:flex;justify-content:center" target="_blank" rel="noopener">Get This Site Live — {offer.PRICE} →</a>
+      <a href="#get-started" style="display:block;text-align:center;margin-top:10px;font-size:13px;color:#888;text-decoration:none">or ask a question first →</a>
     </div>
   </div>
 </section>
@@ -1318,8 +1461,8 @@ footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
 <section class="cta-sect">
   <p class="eyebrow" data-reveal>Ready?</p>
   <h2 data-reveal>Get {name}'s Website Live in 7 Days</h2>
-  <p data-reveal>Starting at $499. No monthly fees. No tech skills needed.</p>
-  <a href="#get-started" class="btn-primary" style="display:inline-flex;margin:0 auto" data-reveal>Claim This Design →</a>
+  <p data-reveal>{offer.PRICE} — free domain + 1 year of hosting included. After year one, just {offer.MONTHLY}. No tech skills needed.</p>
+  <a href="{offer.CHECKOUT_URL}" data-offer-href="checkout" class="btn-primary" style="display:inline-flex;margin:0 auto" data-reveal target="_blank" rel="noopener">Get This Site Live — {offer.PRICE} →</a>
 </section>
 
 <!-- LEAD FORM -->
@@ -1341,7 +1484,7 @@ footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
 
 <!-- FOOTER -->
 <footer>
-  <div class="footer-logo">{name.split()[0]}<em>{"".join(name.split()[1:]) or ""}</em></div>
+  <div class="footer-logo">{footer_logo_html}</div>
   <span class="footer-copy">© 2026 {name} · {city_d}</span>
   <div class="footer-badge">Preview by <a href="https://webbymaya.com" target="_blank">WebByMaya.com</a> · <a href="mailto:maya@webbymaya.com">maya@webbymaya.com</a></div>
 </footer>
@@ -1386,31 +1529,74 @@ document.querySelectorAll('[data-reveal]').forEach(el => {{
 }});
 
 // Lead form
+// Posts to the CURRENT site project's contact_messages. The anon insert policy
+// requires name / email / project_type / message to all be non-empty, so those
+// are defaulted rather than sent blank. Success is shown ONLY after the row is
+// actually accepted — the previous version fired "Maya will reach out" no matter
+// what, while every submission was rejected, so leads vanished in silence.
 document.getElementById('leadForm').addEventListener('submit', function(e) {{
   e.preventDefault();
-  const data = Object.fromEntries(new FormData(this));
+  const form = this;
+  const data = Object.fromEntries(new FormData(form));
+  const biz  = '{name_js}';
+  const details = [
+    data.message ? data.message : 'Requested this website preview.',
+    data.phone ? ('Phone: ' + data.phone) : '',
+    'Business: ' + biz,
+    'Source: mockup preview',
+  ].filter(Boolean).join('\\n');
   const payload = {{
-    business: '{name_js}',
-    name:     data.name    || '',
-    email:    data.email   || '',
-    phone:    data.phone   || '',
-    message:  data.message || '',
-    source:   'mockup_preview',
+    name:         (data.name || biz || 'Website preview lead').slice(0, 200),
+    email:        (data.email || '').slice(0, 320),
+    project_type: ('Website preview — ' + biz).slice(0, 100),
+    message:      details.slice(0, 5000),
+    referrer:     location.href,
   }};
-  // Save lead directly to Supabase
-  fetch('https://ycsauzlqsjjbusugshpz.supabase.co/rest/v1/mockup_leads', {{
+  fetch('{lead_endpoint}', {{
     method: 'POST',
     headers: {{
       'Content-Type':  'application/json',
-      'apikey':        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5NTAzOTMxNH0._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI',
-      'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5NTAzOTMxNH0._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI',
+      'apikey':        '{lead_anon_key}',
+      'Authorization': 'Bearer {lead_anon_key}',
       'Prefer':        'return=minimal',
     }},
     body: JSON.stringify(payload),
-  }}).catch(() => {{}});
-  this.style.display = 'none';
-  document.getElementById('formSuccess').style.display = 'block';
+  }})
+  .then(function(r) {{
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    form.style.display = 'none';
+    document.getElementById('formSuccess').style.display = 'block';
+  }})
+  .catch(function() {{
+    // Never swallow a lead. Hand them a channel that always works.
+    var subj = encodeURIComponent('Website request — ' + biz);
+    var body = encodeURIComponent(details + '\\n\\nFrom: ' + (data.name || '') + ' <' + (data.email || '') + '>');
+    var note = document.createElement('p');
+    note.style.cssText = 'margin-top:1rem;font-weight:600;line-height:1.5';
+    note.innerHTML = "Sorry — that didn't go through. Email me directly at "
+      + '<a href="mailto:maya@webbymaya.com?subject=' + subj + '&body=' + body + '">maya@webbymaya.com</a>'
+      + ' and I\\'ll get right back to you.';
+    form.appendChild(note);
+  }});
 }});
+</script>
+<!-- Live offer sync: pulls current price + checkout link from ONE source so this
+     preview never goes stale when the offer changes. No regeneration ever needed. -->
+<script>
+(function(){{
+  try{{
+    fetch("https://mayasworldwideweb.github.io/previews/offer.json",{{cache:"no-store"}})
+      .then(function(r){{ return r.json(); }})
+      .then(function(o){{
+        document.querySelectorAll("[data-offer]").forEach(function(el){{
+          var k = el.getAttribute("data-offer"); if (o[k] != null) el.textContent = o[k];
+        }});
+        document.querySelectorAll("[data-offer-href]").forEach(function(el){{
+          var k = el.getAttribute("data-offer-href"); if (o[k]) el.setAttribute("href", o[k]);
+        }});
+      }}).catch(function(){{}});
+  }}catch(e){{}}
+}})();
 </script>
 </body>
 </html>"""
@@ -1418,7 +1604,19 @@ document.getElementById('leadForm').addEventListener('submit', function(e) {{
 
 GITHUB_PAGES_BASE = "https://mayasworldwideweb.github.io/previews"
 GITHUB_REPO       = "MayasWorldWideWeb/previews"
-GITHUB_REPO_PATH  = "/tmp/previews-repo"
+# NOT /tmp — macOS reaps files there by access time, which silently deletes
+# .git/HEAD and .git/config and breaks every mockup push until someone re-clones.
+GITHUB_REPO_PATH  = os.path.expanduser("~/.webbymaaya/previews-repo")
+
+def _is_git_repo(path) -> bool:
+    """True only if git itself accepts the directory as a working repo."""
+    import subprocess
+    if not path.is_dir():
+        return False
+    return subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--git-dir"],
+        capture_output=True).returncode == 0
+
 
 def _token_slug(name: str) -> str:
     """Return slug with a 6-char hash token — non-guessable, stable per business name."""
@@ -1432,16 +1630,23 @@ def upload_mockup(
     phone: str = "",
     city: str = "Philadelphia, PA",
     address: str = "",
+    website: str = "",
 ) -> str:
     """Generate a mockup HTML file and push to GitHub Pages. Returns public URL or ''."""
     import subprocess, pathlib
     biz_slug = _token_slug(name)
     filename = f"{biz_slug}.html"
-    html     = generate_html_online(name, category, phone, city, address)
+    html     = generate_html_online(name, category, phone, city, address, website)
 
     repo = pathlib.Path(GITHUB_REPO_PATH)
-    # Clone repo if not present
-    if not (repo / ".git").exists():
+    # Clone if absent. A directory that exists but isn't a valid repo (metadata
+    # deleted, interrupted clone) is wiped and re-cloned — otherwise every later
+    # `git add` fails with exit 128 and mockups silently stop being published.
+    if not _is_git_repo(repo):
+        if repo.exists():
+            print(f"  [mockup] {repo} is not a valid git repo — re-cloning")
+            shutil.rmtree(repo, ignore_errors=True)
+        repo.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["git", "clone", f"https://github.com/{GITHUB_REPO}.git", str(repo)],
             capture_output=True, check=True)

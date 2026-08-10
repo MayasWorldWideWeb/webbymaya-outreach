@@ -19,8 +19,9 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from batch_send_outreach import send_email, normalize_category, SKIP_DOMAINS, html_card, _ep, _ecta
+from batch_send_outreach import send_email, normalize_category, SKIP_DOMAINS, html_card, _ep, _ecta, SUPPRESSED_EMAILS, clean_business_name
 from sb import log_email
+from collections import defaultdict
 
 GITHUB_PAGES_BASE = "https://mayasworldwideweb.github.io/previews"
 
@@ -125,9 +126,19 @@ def _first_name(business_name: str) -> str:
 FOLLOWUP_LOG = SCRIPT_DIR / f"followup_log_{datetime.date.today()}.csv"
 FOLLOWUP_STATE = Path.home() / ".webbymaaya/followup_state.json"
 
-# Which days trigger which follow-up number
+# Which days trigger which follow-up number.
+# First 3 touches are fast (day 3 / 7 / 14); after that we check in ~monthly,
+# indefinitely, until the prospect replies "no" or the address bounces (both of
+# which land them on the shared suppression list, bounce_log.csv).
 SEQUENCE = {3: 1, 7: 2, 14: 3}
-MAX_FOLLOWUP = 3
+MONTHLY_INTERVAL = 30            # days between check-ins after touch #3
+
+def _trigger_day(num: int) -> int:
+    """Day (since first contact) when follow-up `num` becomes due. Unbounded."""
+    fast = {1: 3, 2: 7, 3: 14}
+    if num in fast:
+        return fast[num]
+    return 14 + (num - 3) * MONTHLY_INTERVAL   # 44, 74, 104, ...
 
 LOG_FIELDS = ["timestamp","name","category","email","followup_num","subject","status","notes"]
 
@@ -155,8 +166,17 @@ def _subject(name: str, category: str, num: int) -> str:
             "gym":               f"Fitness clients search online — is {name} visible?",
         }
         return lines.get(cat, f"Quick follow-up — {name}'s website preview")
-    # num == 3
-    return f"Closing {name}'s file on Friday — last chance"
+    if num == 3:
+        return f"Closing {name}'s file on Friday — last chance"
+    # num >= 4 — gentle recurring check-in, rotated so it's never identical twice
+    checkins = [
+        f"Still here whenever you're ready, {first}",
+        f"Quick check-in on {name}'s website",
+        f"Reviving {name}'s free preview",
+        f"Anytime you want to get {name} online",
+        f"{name} — the free preview's still yours",
+    ]
+    return checkins[(num - 4) % len(checkins)]
 
 
 # ── Email bodies ─────────────────────────────────────────────────────────────
@@ -174,7 +194,7 @@ Just wanted to make sure this didn't get lost — I put together a free website 
 
 Takes 30 seconds to look at: {cta_url}
 
-No commitment, no catch. If you like what you see, we can have it live in 7 days starting at $499. No monthly fees.
+No commitment, no catch. If you like what you see, we can have it live in 7 days starting at $499 — free domain + 1 year of hosting included ($29/mo after year one).
 
 If the timing's off, no worries — just let me know.
 
@@ -185,7 +205,7 @@ WebByMaya.com"""
             _ep(f"Hey {first},")
             + _ep(f"Just wanted to make sure this didn't get lost — I put together a <strong>free website preview</strong> for {name} a few days ago.")
             + _ecta(cta_url, "&#128064;&nbsp;&nbsp;See Your Free Preview &rarr;")
-            + _ep("No commitment, no catch. If you like what you see, we can have it <strong>live in 7 days starting at $499</strong>. No monthly fees.")
+            + _ep("No commitment, no catch. If you like what you see, we can have it <strong>live in 7 days starting at $499</strong> — free domain + 1 year of hosting included ($29/mo after year one).")
             + _ep("If the timing's off, no worries — just reply and let me know."),
             email=email,
         )
@@ -218,7 +238,7 @@ WebByMaya.com"""
 
 Your preview is still live here: {cta_url}
 
-Starting at $499. Live in 7 days. No monthly fees.
+Starting at $499. Live in 7 days. Free domain + 1 year of hosting included ($29/mo after year one).
 
 — Maya
 WebByMaya.com"""
@@ -228,11 +248,11 @@ WebByMaya.com"""
             + _ep(hook)
             + _ep(closer)
             + _ecta(cta_url, f"View {name}&#39;s Preview &rarr;")
-            + _ep("<strong>Starting at $499. Live in 7 days. No monthly fees.</strong>"),
+            + _ep("<strong>Starting at $499. Live in 7 days. Free domain + 1 year of hosting included</strong> ($29/mo after year one)."),
             email=email,
         )
 
-    else:  # num == 3
+    elif num == 3:
         plain = f"""Hey {first},
 
 I've reached out a couple of times about a free website preview I built for {name}, but haven't heard back — so I'm going to close out your file on Friday to make room for new clients.
@@ -250,6 +270,27 @@ WebByMaya.com"""
             + _ep("If you want to take one last look before I do:")
             + _ecta(cta_url, "Take One Last Look &rarr;")
             + _ep("If the timing just isn't right, no hard feelings at all. I'll be here when you're ready."),
+            email=email,
+        )
+
+    else:  # num >= 4 — recurring monthly check-in, low-key, easy opt-out
+        plain = f"""Hey {first},
+
+Just checking back in — I'd still love to get {name} online whenever the timing's right. The free preview I built is here if you'd like a look: {cta_url}
+
+Starting at $499, live in 7 days — free domain + 1 year of hosting included ($29/mo after year one). No rush at all.
+
+If you'd rather I stop checking in, just reply "stop" and I won't email again.
+
+— Maya
+WebByMaya.com"""
+
+        html = html_card(
+            _ep(f"Hey {first},")
+            + _ep(f"Just checking back in — I'd still love to get <strong>{name}</strong> online whenever the timing's right. The free preview I built is here if you'd like a look:")
+            + _ecta(cta_url, "See Your Free Preview &rarr;")
+            + _ep("Starting at $499, live in 7 days — free domain + 1 year of hosting included ($29/mo after year one). No rush at all.")
+            + _ep("If you&#39;d rather I stop checking in, just reply &ldquo;stop&rdquo; and I won&#39;t email again."),
             email=email,
         )
 
@@ -299,7 +340,7 @@ def _load_sent_history() -> list:
                 notes_val = row.get("notes","")
                 mockup_val = row.get("mockup_url","") or (notes_val if notes_val.startswith("http") else "")
                 seen[email] = {
-                    "name":       row.get("name",""),
+                    "name":       clean_business_name(row.get("name","")),
                     "category":   row.get("category",""),
                     "email":      email,
                     "sent_date":  ts,
@@ -334,7 +375,7 @@ def main():
 
     sent_today = 0
     skipped    = 0
-    counts     = {1: 0, 2: 0, 3: 0}
+    counts     = defaultdict(int)
 
     print(f"\n{'='*58}")
     print(f"  WebByMaya Follow-Up Engine  {'[DRY RUN] ' if args.dry_run else ''}— {today}")
@@ -358,24 +399,26 @@ def main():
             skipped += 1
             continue
 
-        # Skip unsubscribed
-        if es.get("unsubscribed"):
+        # Skip if opted out (local flag) OR on the shared suppression list —
+        # bounce_log.csv holds both hard bounces (sync_bounces.py) and
+        # "not interested / stop" replies (auto_reply.py). This is the gate that
+        # makes an unbounded cadence safe: we only stop on no / bad-address.
+        if es.get("unsubscribed") or email in SUPPRESSED_EMAILS:
             skipped += 1
             continue
 
-        # Determine which follow-up to send
+        # Determine the next pending follow-up — unbounded monthly cadence.
+        # Find the lowest follow-up number not yet sent; send it if it's due.
         fu_num = None
-        for day_trigger, num in sorted(SEQUENCE.items()):
-            if days_since >= day_trigger and not es.get(f"fu{num}"):
-                fu_num = num
-                break  # send lowest pending follow-up
+        n = 1
+        while n <= 200:                      # safety ceiling (~16 yrs of monthlies)
+            if not es.get(f"fu{n}"):
+                if days_since >= _trigger_day(n):
+                    fu_num = n
+                break                         # lowest unsent touch decides
+            n += 1
 
         if fu_num is None:
-            skipped += 1
-            continue
-
-        # Don't re-send if all 3 already done
-        if all(es.get(f"fu{n}") for n in range(1, MAX_FOLLOWUP + 1)):
             skipped += 1
             continue
 
@@ -430,6 +473,8 @@ def main():
     print(f"  Follow-up 1 (day 3) : {counts[1]}")
     print(f"  Follow-up 2 (day 7) : {counts[2]}")
     print(f"  Follow-up 3 (day 14): {counts[3]}")
+    monthly = sum(v for k, v in counts.items() if k >= 4)
+    print(f"  Monthly check-ins   : {monthly}")
     print(f"  Total sent          : {sum(counts.values())}")
     print(f"  Skipped             : {skipped}")
     if args.dry_run:

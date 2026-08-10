@@ -206,8 +206,17 @@ def main():
 
     parallel_source("find_prospects_bbb.py", "BBB", timeout=240)
 
+    # Philly business licenses (OpenDataPhilly, free, no key) — freshly licensed
+    # businesses are the best leads: brand-new, almost never have a website yet.
+    # City-wide (no zone concept); its own state file makes daily runs incremental.
+    phl_out = SCRIPT_DIR / f"prospects_phl_licenses_{today}.csv"
+    if _run_subprocess([sys.executable, str(SCRIPT_DIR / "find_prospects_phila_licenses.py"),
+                        "--output", str(phl_out)], timeout=120):
+        merge_source("PhillyLicenses", phl_out)
+
     # Manta blocks bots (403) — skipping
-    # FSQ free API deprecated 2025 — skipping
+    # FSQ free API deprecated 2025 — skipping (key also dead on new endpoint, 401 verified 2026-07-16)
+    # HERE key dead (401 verified 2026-07-16) — regenerate at developer.here.com to reactivate
 
     # ── 4. Write merged CSV ───────────────────────────────────────────────────
     if merged:

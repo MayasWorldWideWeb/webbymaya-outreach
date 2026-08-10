@@ -48,6 +48,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse, urljoin
 from sb import log_prospects
+from batch_send_outreach import clean_business_name
 
 try:
     import googlemaps
@@ -514,7 +515,7 @@ def search_one(client, city, location, radius, category, seen_ids, seen_lock, pr
                 if detail.get("business_status") == "PERMANENTLY_CLOSED":
                     continue
 
-                name = detail.get("name", "")
+                name = clean_business_name(detail.get("name", ""))
                 if is_chain(name):
                     continue
 

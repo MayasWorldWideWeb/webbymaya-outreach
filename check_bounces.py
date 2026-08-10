@@ -15,6 +15,8 @@ from sb import log_bounce
 
 SCRIPT_DIR = Path(__file__).parent
 BOUNCE_LOG = SCRIPT_DIR / "bounce_log.csv"
+# The on-disk column order. Every writer must use this exact list.
+BOUNCE_FIELDS = ["email", "phone", "reason", "date", "notes"]
 API_KEY    = os.environ.get("SENDGRID_API_KEY", "")
 
 ENDPOINTS = [
@@ -57,22 +59,25 @@ def main():
             if not email or email in existing:
                 continue
             new_rows.append({
-                "timestamp": r.get("created", datetime.datetime.now().isoformat()),
-                "email":     email,
-                "type":      kind,
-                "reason":    r.get("reason", r.get("description", ""))[:200],
+                "email":  email,
+                "phone":  "",
+                "reason": kind,
+                "date":   str(r.get("created", datetime.date.today().isoformat()))[:10],
+                "notes":  r.get("reason", r.get("description", ""))[:200],
             })
             existing.add(email)
 
-    # Write / append to bounce_log.csv
+    # Write / append to bounce_log.csv. These fieldnames MUST match the file's
+    # real header — DictWriter writes positionally, so a mismatched list shifts
+    # every value one column over and the address stops matching suppression.
     write_header = not BOUNCE_LOG.exists()
     with open(BOUNCE_LOG, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["timestamp","email","type","reason"])
+        writer = csv.DictWriter(f, fieldnames=BOUNCE_FIELDS)
         if write_header:
             writer.writeheader()
         writer.writerows(new_rows)
     for row in new_rows:
-        log_bounce(row["email"], row["type"], row["reason"])
+        log_bounce(row["email"], row["reason"], row["notes"])
 
     print(f"Bounce log: {len(new_rows)} new record(s) added → {BOUNCE_LOG.name}")
 
@@ -102,9 +107,12 @@ def main():
         rows = list(csv.DictReader(open(BOUNCE_LOG, newline="")))
         by_type: dict = {}
         for r in rows:
-            by_type[r["type"]] = by_type.get(r["type"], 0) + 1
-        for t, count in sorted(by_type.items()):
-            print(f"  {t:<10} {count}")
+            # Column is "reason" (bounce / block / hard_bounce / invalid / spam).
+            # Use .get so a future schema change degrades instead of crashing.
+            kind = (r.get("reason") or "unknown").strip() or "unknown"
+            by_type[kind] = by_type.get(kind, 0) + 1
+        for t, count in sorted(by_type.items(), key=lambda kv: -kv[1]):
+            print(f"  {t:<22} {count}")
 
 
 if __name__ == "__main__":

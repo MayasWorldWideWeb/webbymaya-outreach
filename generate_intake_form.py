@@ -211,7 +211,7 @@ def generate_html(name: str, category: str, mockup_url: str = "") -> str:
     <div class="total-bar" style="margin-bottom:20px">
       <div class="total-label">Your Investment</div>
       <div class="total-amount" id="totalDisplay">$799</div>
-      <div class="total-sub">One-time · No monthly fees (unless maintenance selected)</div>
+      <div class="total-sub">One-time build · Free domain + 1 year hosting included · then $29/mo</div>
       <div class="deposit-line">To get started: <strong id="depositDisplay">$200 deposit</strong> · rest due on launch day</div>
     </div>
 

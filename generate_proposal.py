@@ -307,7 +307,7 @@ def make_proposal(
     pdf.cell(30, 5, "All packages include:", align="L")
     _text(pdf, *BODY)
     pdf.set_font("Helvetica", "", 9)
-    items = ["1-year free hosting", "SSL certificate", "Domain setup", "30-day support"]
+    items = ["Free domain (1st year)", "Free hosting (1st year)", "SSL certificate", "30-day support"]
     x_cursor = PAD + 42
     for item in items:
         _text(pdf, *GOLD)

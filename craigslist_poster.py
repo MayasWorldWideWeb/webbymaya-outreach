@@ -97,7 +97,7 @@ Here's how it works:
 2. I build your site in 7 days
 3. You go live — customers can find you, book you, call you
 
-Starting at $799. No monthly fees to me. No surprises.
+Starting at $499. Free domain + 1 year of hosting included ($29/mo after year one). No surprises.
 
 I work with: nail salons, hair salons, restaurants, cafes, auto repair, landscaping, photography, cleaning services, gyms, and more.
 

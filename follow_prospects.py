@@ -97,8 +97,13 @@ def get_client():
     if not COOKIE_FILE.exists():
         sys.exit("No session cookie found. Grab sessionid from Chrome DevTools on instagram.com and save to ~/.webbymaaya/ig_cookie.txt")
     cl = Client()
-    cl.login_by_sessionid(COOKIE_FILE.read_text().strip())
-    cl.account_info()
+    try:
+        cl.login_by_sessionid(COOKIE_FILE.read_text().strip())
+        cl.account_info()
+    except Exception as e:
+        # An expired sessionid shows up as a redirect loop back to the login page.
+        # Exit clean rather than dumping a traceback into the log on every run.
+        sys.exit(f"Session expired ({e}). Re-run ig_login.py to refresh.")
     return cl
 
 

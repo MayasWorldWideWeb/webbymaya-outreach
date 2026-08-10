@@ -55,7 +55,8 @@ for {business_name}, and wanted to make sure it didn't get buried.
 
 If the timing isn't right, no worries at all. But if getting {business_name} \
 online has been on your mind, I'd love to help. I build clean, fast, \
-mobile-ready sites for Philly businesses starting at $799 — live in 7 days.
+mobile-ready sites for Philly businesses starting at $499 — live in 7 days, \
+with a free domain + 1 year of hosting included ($29/mo after year one).
 
 Get started (takes 10 min, no calls needed): https://webbymaya.com/book
 Or just reply here — I check this daily.
@@ -63,6 +64,7 @@ Or just reply here — I check this daily.
 — Maya
 Web Designer · WebByMaya.com
 maya@webbymaya.com
+7213 Montour St, Philadelphia, PA 19111
 """
 
 FOLLOWUP_HTML = """\
@@ -73,7 +75,8 @@ for <strong>{business_name}</strong>, and wanted to make sure it didn't get buri
 <p>If the timing isn't right, no worries at all. But if getting
 <strong>{business_name}</strong> online has been on your mind, I'd love to help.
 I build clean, fast, mobile-ready sites for Philly businesses
-<strong>starting at $799 — live in 7 days.</strong></p>
+<strong>starting at $499 — live in 7 days, with a free domain + 1 year of hosting included</strong>
+($29/mo after year one).</p>
 <p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:10px 20px;text-decoration:none;border-radius:4px;display:inline-block;font-weight:bold">Get started — no calls needed →</a></p>
 <p>Or just reply here — I check this daily.</p>
 <p>— Maya<br>Web Designer · <a href="https://webbymaya.com">WebByMaya.com</a></p>
@@ -89,8 +92,8 @@ Hi {business_name} team,
 
 I won't keep reaching out after this — just wanted to leave the door open.
 
-If a website for {business_name} ever makes sense, I'm here. starting at $499, \
-live in 7 days, no calls needed.
+If a website for {business_name} ever makes sense, I'm here. Starting at $499 — \
+free domain + 1 year of hosting included, live in 7 days, no calls needed.
 
 https://webbymaya.com/book
 
@@ -102,7 +105,7 @@ FOLLOWUP2_HTML = """\
 <p>Hi <strong>{business_name}</strong> team,</p>
 <p>I won't keep reaching out after this — just wanted to leave the door open.</p>
 <p>If a website for <strong>{business_name}</strong> ever makes sense, I'm here.
-<strong>starting at $499, live in 7 days, no calls needed.</strong></p>
+<strong>Starting at $499 — free domain + 1 year of hosting included, live in 7 days, no calls needed.</strong></p>
 <p><a href="https://webbymaya.com/book" style="background:#C9A96E;color:#000;padding:10px 20px;text-decoration:none;border-radius:4px;display:inline-block;font-weight:bold">Start here →</a></p>
 <p>— Maya<br>Web Designer · <a href="https://webbymaya.com">WebByMaya.com</a></p>
 </body></html>
@@ -125,12 +128,13 @@ from now — my form stays open:
 
 https://webbymaya.com/book
 
-starting at $499, no monthly fees, live in 7 days.
+Starting at $499 — free domain + 1 year of hosting included, live in 7 days ($29/mo after year one).
 
 Wishing you and your business the best.
 
 — Maya
 Web Designer · WebByMaya.com
+7213 Montour St, Philadelphia, PA 19111
 """
 
 FOLLOWUP3_HTML = """\
@@ -141,7 +145,7 @@ FOLLOWUP3_HTML = """\
 out your file and stop following up.</p>
 <p>If the timing was never right, truly no hard feelings.</p>
 <p>But if a website ever makes sense for <strong>{business_name}</strong>, my form
-stays open. <strong style="color:#333">starting at $499 · live in 7 days &middot; no calls needed.</strong></p>
+stays open. <strong style="color:#333">Starting at $499 · free domain + 1 year hosting included · live in 7 days.</strong></p>
 <p style="margin:24px 0">
   <a href="https://webbymaya.com/book"
     style="background:#C9A96E;color:#000;padding:11px 22px;text-decoration:none;
@@ -222,7 +226,7 @@ def load_sent_emails() -> dict:
                 if not email:
                     continue
                 ts = row.get("timestamp", "")[:10]
-                name = row.get("name", "").strip()
+                name = clean_business_name(row.get("name", ""))
                 category = row.get("category", "").strip()
                 if email not in contacts:
                     contacts[email] = {"email": email, "name": name,
@@ -293,55 +297,19 @@ def _gmail_access_token() -> str:
     return access
 
 
-def send_email(to: str, subject: str, plain: str, html: str) -> bool:
-    access = _gmail_access_token()
-    if access:
-        try:
-            msg = email.mime.multipart.MIMEMultipart("alternative")
-            msg["To"]      = to
-            msg["From"]    = f"{SENDER_NAME} <{SENDER_EMAIL}>"
-            msg["Subject"] = subject
-            msg.attach(email.mime.text.MIMEText(plain, "plain"))
-            msg.attach(email.mime.text.MIMEText(html,  "html"))
-            raw     = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-            payload = json.dumps({"raw": raw}).encode()
-            req = urllib.request.Request(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                data=payload,
-                headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json"},
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=10)
-            return True
-        except urllib.error.HTTPError as e:
-            print(f"  [GMAIL ERROR] {e.code}: {e.read().decode()[:200]}")
-        except Exception as exc:
-            print(f"  [GMAIL ERROR] {exc}")
+from batch_send_outreach import send_email as _multi_send, clean_business_name
 
-    # Fallback: SendGrid
-    if not SENDGRID_API_KEY:
-        print("  [ERROR] No Gmail token and no SENDGRID_API_KEY — cannot send")
-        return False
-    payload = json.dumps({
-        "personalizations": [{"to": [{"email": to}]}],
-        "from": {"email": SENDER_EMAIL, "name": SENDER_NAME},
-        "subject": subject,
-        "content": [{"type": "text/plain", "value": plain},
-                    {"type": "text/html",  "value": html}],
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.sendgrid.com/v3/mail/send", data=payload,
-        headers={"Authorization": f"Bearer {SENDGRID_API_KEY}",
-                 "Content-Type": "application/json"}, method="POST")
-    try:
-        urllib.request.urlopen(req)
-        return True
-    except urllib.error.HTTPError as e:
-        print(f"  [SG ERROR] {e.code}: {e.read().decode()[:200]}")
-        return False
-    except Exception as exc:
-        print(f"  [ERROR] {exc}")
-        return False
+
+def send_email(to: str, subject: str, plain: str, html: str) -> bool:
+    """Send via the shared multi-provider chain (Brevo → Brevo2 → SendGrid →
+    SendPulse → Mailgun → Gmail). Previously SendGrid+Gmail only, which failed
+    once SendGrid hit its daily cap."""
+    ok, provider = _multi_send(to, subject, plain, html)
+    if ok:
+        print(f"  Sent via {provider} → {to}.")
+    else:
+        print(f"  [ERROR] All providers failed for {to}.")
+    return ok
 
 
 # ---------------------------------------------------------------------------

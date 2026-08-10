@@ -52,7 +52,14 @@ SKIP_DOMAINS = {
     "upenn.edu","temple.edu","drexel.edu","prweb.com","businesswire.com",
     "fresha.com","birdeye.com","yelp.com","yext.com","thryv.com",
     "grubhub.com","doordash.com","toasttab.com","squareup.com",
+    # Autoresponder / marketing senders that loop or spam notifications —
+    # never real leads (nourish.com alone caused 482 phantom "reply" pings).
+    "nourish.com","brightmoney.co","alexanderwang.com","sabor.com","spoton.com",
 }
+
+# Local-parts that are robots by definition — never notify on these.
+ROBOT_LOCALPARTS = ("no-reply","noreply","donotreply","do-not-reply",
+                    "mailer-daemon","postmaster","bounce","bounces","notifications")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -245,6 +252,9 @@ def check_gmail_replies(seen: set) -> list[dict]:
                 continue
             domain = addr.split("@")[-1] if "@" in addr else ""
             if domain in SKIP_DOMAINS or domain.endswith(".gov") or domain.endswith(".edu"):
+                continue
+            local = addr.split("@")[0]
+            if any(tok in local for tok in ROBOT_LOCALPARTS):
                 continue
 
             subj    = hdrs.get("Subject","(no subject)")

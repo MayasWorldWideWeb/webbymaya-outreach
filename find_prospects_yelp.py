@@ -19,6 +19,7 @@ USAGE:
 import argparse, csv, datetime, json, os, sys, time, urllib.request, urllib.parse
 from pathlib import Path
 import importlib.util as _ilu
+from batch_send_outreach import clean_business_name
 
 def _get_normalizer():
     spec = _ilu.spec_from_file_location("bso", Path(__file__).parent / "batch_send_outreach.py")
@@ -218,9 +219,22 @@ CSV_COLUMNS = ["name","address","phone","email","category","city",
                "has_website","rating","review_count","notes","sms_status"]
 
 
+# Set once the account is definitively out of quota. Every later call would get
+# the same answer, so stop asking instead of burning a few hundred round-trips
+# per run printing the same error.
+_KEY_DEAD = False
+
+# Substrings that mean "this key will not work again today, or ever"
+_TERMINAL_ERRORS = ("trial has expired", "access limit reached",
+                    "not authorized", "invalid api key", "insufficient")
+
+
 def yelp_get(path, params=None):
+    global _KEY_DEAD
     if not API_KEY:
         sys.exit("ERROR: YELP_API_KEY not set.\nGet a free key at https://www.yelp.com/developers/v3/manage_app\nThen: export YELP_API_KEY='your_key'")
+    if _KEY_DEAD:
+        return {}
     url = f"https://api.yelp.com/v3{path}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -233,12 +247,23 @@ def yelp_get(path, params=None):
             print("  [rate limit] sleeping 60s...")
             time.sleep(60)
             return yelp_get(path, params)
-        err = json.loads(e.read().decode())
-        print(f"  [yelp error] {err.get('error',{}).get('description','unknown')}")
+        try:
+            desc = json.loads(e.read().decode()).get("error", {}).get("description", "unknown")
+        except Exception:
+            desc = f"HTTP {e.code}"
+        print(f"  [yelp error] {desc}")
+        if any(t in desc.lower() for t in _TERMINAL_ERRORS):
+            _KEY_DEAD = True
+            print("  [yelp] key is dead — skipping all remaining Yelp calls this run.")
         return {}
     except Exception as e:
         print(f"  [error] {e}")
         return {}
+
+
+def key_is_dead() -> bool:
+    """True once Yelp has told us the key is out of quota for good."""
+    return _KEY_DEAD
 
 
 def get_business_website(biz_id):
@@ -296,7 +321,7 @@ def search_category(location, yelp_cat, friendly_cat, seen_ids, limit=50):
             if biz_id in seen_ids:
                 continue
 
-            name    = biz.get("name","").strip()
+            name    = clean_business_name(biz.get("name",""))
             phone   = biz.get("phone","").strip()
             addr    = biz.get("location",{})
             address = ", ".join(filter(None, [

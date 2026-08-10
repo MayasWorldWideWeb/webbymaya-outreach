@@ -46,12 +46,15 @@ def main():
     # Append to bounce_log.csv
     write_header = not BOUNCE_LOG.exists()
     with open(BOUNCE_LOG, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["email", "reason", "timestamp"])
+        # Must match bounce_log.csv's real header — a mismatched fieldname list
+        # writes positionally and silently shifts every value one column left.
+        writer = csv.DictWriter(f, fieldnames=["email", "phone", "reason", "date"])
         if write_header:
             writer.writeheader()
         import datetime
+        today = datetime.date.today().isoformat()
         for email in new_ones:
-            writer.writerow({"email": email, "reason": "unsubscribed", "timestamp": datetime.datetime.utcnow().isoformat()})
+            writer.writerow({"email": email, "phone": "", "reason": "unsubscribed", "date": today})
 
     print(f"[sync] Added {len(new_ones)} unsubscribe(s) to bounce_log.csv:")
     for e in new_ones:

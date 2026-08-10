@@ -58,6 +58,7 @@ OUTPUT
 import argparse
 import csv
 import re as _re
+import offer  # single source for offer copy + CAN-SPAM business address
 from sb import log_email
 import datetime
 import json
@@ -110,8 +111,19 @@ def _load_suppressed() -> set:
     if not path.exists():
         return set()
     import csv as _csv
+    suppressed = set()
     with open(path, newline="") as f:
-        return {row["email"].lower() for row in _csv.DictReader(f)}
+        for row in _csv.DictReader(f):
+            # Read the address out of whichever column actually holds it. A
+            # writer once used a mismatched fieldname list, which shifted every
+            # address into the phone column and quietly un-suppressed 85 known
+            # bad addresses — this makes that class of drift harmless.
+            for val in row.values():
+                v = (val or "").strip().lower()
+                if "@" in v:
+                    suppressed.add(v)
+                    break
+    return suppressed
 
 SUPPRESSED_EMAILS = _load_suppressed()
 
@@ -351,6 +363,25 @@ _SUBJECT_MAP = {
 
 
 # ---------------------------------------------------------------------------
+# Business-name sanitizing — scrapers return search-result markup
+# ---------------------------------------------------------------------------
+
+def clean_business_name(name: str) -> str:
+    """Strip search-highlight markup out of a scraped business name.
+
+    Scraped listings come back with the matched terms wrapped for highlighting
+    ("Prestige <em>Nail</em> <em>Salon</em>"). Left alone, that markup lands
+    verbatim in the subject line, which reads as spam.
+    """
+    import html as _html
+    if not name:
+        return ""
+    name = _re.sub(r"<[^>]+>", "", name)
+    name = _html.unescape(name)
+    return _re.sub(r"\s+", " ", name).strip()
+
+
+# ---------------------------------------------------------------------------
 # Category normalization — correct mislabeled businesses using their name
 # ---------------------------------------------------------------------------
 
@@ -367,7 +398,10 @@ _NAME_CATEGORY_RULES = [
       "car repair", "car care", "car service", "car tech",
       "mechanic", "automotive", "auto body", "body shop",
       "transmission", "brakes", "muffler", "exhaust", "engine repair",
-      "oil change", "lube"],                                                   "auto repair"),
+      "oil change", "lube",
+      "auto group", "auto sales", "motors", "dealership",
+      "bmw service", "honda service", "toyota service", "ford service",
+      "nissan service", "subaru service", "audi service"],                     "auto repair"),
     (["auto tag", "auto tags", "vehicle tag", "notary auto",
       "tag and title", "tags & title"],                                        "auto tags"),  # skip these — not web clients
     (["tire", "tires", "wheel alignment", "rim ", "rims"],                    "tire shop"),
@@ -643,12 +677,14 @@ EMAIL_PLAIN_TEMPLATE = """\
 
 {review_hook}{pain_point}
 I'm Maya, a web designer based in Philly. I built {business_name} a free preview — \
-Starting at $499 — live in 7 days. No monthly fees, no tech work on your end.
+starting at $499, live in 7 days. Includes a free domain + 1 year of hosting, SSL & full setup — \
+no tech work on your end. After year one, hosting & maintenance is just $29/mo.
 
 Just reply YES to this email and I'll send everything over.
 
 Maya Sierra
 WebByMaya.com · maya@webbymaya.com
+7213 Montour St, Philadelphia, PA 19111
 
 P.S. {ps_line}
 """
@@ -686,13 +722,13 @@ def _friendly_type(category: str) -> str:
     return _TYPE_MAP.get(key, key or "business")
 
 
-def _get_mockup_url(name: str, category: str, phone: str = "", city: str = "Philadelphia, PA", address: str = "") -> str:
+def _get_mockup_url(name: str, category: str, phone: str = "", city: str = "Philadelphia, PA", address: str = "", website: str = "") -> str:
     """Upload a personalized mockup to Supabase. Returns public URL or ''."""
     try:
         import sys as _sys
         _sys.path.insert(0, str(_SCRIPT_DIR))
         from mockup_uploader import upload_mockup
-        return upload_mockup(name, category, phone, city, address)
+        return upload_mockup(name, category, phone, city, address, website)
     except Exception:
         return ""
 
@@ -752,6 +788,21 @@ def _neighborhood(city: str, address: str) -> str:
 
 _UNSUB_BASE = "https://ycsauzlqsjjbusugshpz.supabase.co/storage/v1/object/public/mockups/unsubscribe.html"
 
+# One-click unsubscribe endpoint (Supabase edge function; handles GET link + RFC 8058
+# one-click POST, records into the unsubscribes table). This powers the RFC headers
+# below — the STANDARD on every send for Gmail/Yahoo bulk-sender compliance + inboxing.
+_UNSUB_FN = "https://ycsauzlqsjjbusugshpz.supabase.co/functions/v1/unsubscribe"
+
+
+def _list_unsub_headers(to: str) -> dict:
+    """RFC 2369 + RFC 8058 List-Unsubscribe headers for one recipient."""
+    import urllib.parse as _up
+    link = f"{_UNSUB_FN}?email={_up.quote(to)}"
+    return {
+        "List-Unsubscribe": f"<{link}>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }
+
 def html_card(body_html: str, email: str = "") -> str:
     """Wrap body_html in the standard WebByMaya branded email card."""
     import urllib.parse as _up
@@ -779,7 +830,7 @@ def html_card(body_html: str, email: str = "") -> str:
         '<a href="https://webbymaya.com" style="color:#C9A96E;text-decoration:none;font-weight:600;">'
         'WebByMaya.com</a> &nbsp;&middot;&nbsp; maya@webbymaya.com</p>'
         f'<p style="margin:0;font-size:11px;color:#cccccc;font-family:Arial,sans-serif;">'
-        f'Philadelphia, PA &nbsp;&middot;&nbsp; '
+        f'{offer.BUSINESS_ADDRESS} &nbsp;&middot;&nbsp; '
         f'<a href="{unsub_url}" style="color:#cccccc;text-decoration:underline;">Unsubscribe</a></p>'
         '</td></tr></table>'
         '</td></tr>'
@@ -936,7 +987,8 @@ def build_email_body(name: str, category: str, phone: str = "", city: str = "Phi
         + _ep(pain_point)
         + _ep(
             f"I'm Maya, a web designer based in Philly. I built {name} a free preview — "
-            f"<strong>starting at $499</strong>, live in 7 days. No monthly fees, no tech work on your end."
+            f"<strong>starting at $499</strong>, live in 7 days. Includes a <strong>free domain + 1 year of hosting</strong>, "
+            f"SSL &amp; full setup — no tech work on your end. After year one, hosting &amp; maintenance is just $29/mo."
         )
         + _ecta("", f'Just reply <span style="color:#C9A96E;">YES</span> to this email and I\'ll send everything over.', dark=True)
         + _ep(f"P.S. {ps_line}", muted=True, small=True, italic=True)
@@ -967,7 +1019,7 @@ def build_email_body(name: str, category: str, phone: str = "", city: str = "Phi
         '<a href="https://webbymaya.com" style="color:#C9A96E;text-decoration:none;font-weight:600;">'
         'WebByMaya.com</a> &nbsp;&middot;&nbsp; maya@webbymaya.com</p>'
         + f'<p style="margin:0;font-size:11px;color:#cccccc;font-family:Arial,sans-serif;">'
-        f'Philadelphia, PA &nbsp;&middot;&nbsp; '
+        f'{offer.BUSINESS_ADDRESS} &nbsp;&middot;&nbsp; '
         f'<a href="{_UNSUB_BASE + ("?email=" + __import__("urllib.parse", fromlist=["quote"]).quote(to_email) if to_email else "")}" '
         f'style="color:#cccccc;text-decoration:underline;">Unsubscribe</a></p>'
         + '</td></tr></table>'
@@ -1101,6 +1153,7 @@ def _send_via_sendgrid(to: str, subject: str, plain: str, html: str) -> bool:
         "from": {"email": SENDER_EMAIL, "name": SENDER_NAME},
         "subject": subject,
         "content": [{"type": "text/plain", "value": plain}, {"type": "text/html", "value": html}],
+        "headers": _list_unsub_headers(to),
     }).encode("utf-8")
     ok, code, body, capped = _post_with_retry(
         "https://api.sendgrid.com/v3/mail/send",
@@ -1128,6 +1181,7 @@ def _send_via_brevo(to: str, subject: str, plain: str, html: str) -> bool:
         "subject":     subject,
         "textContent": plain,
         "htmlContent": html,
+        "headers":     _list_unsub_headers(to),
     }).encode("utf-8")
     ok, code, body, capped = _post_with_retry(
         "https://api.brevo.com/v3/smtp/email",
@@ -1154,6 +1208,7 @@ def _send_via_brevo2(to: str, subject: str, plain: str, html: str) -> bool:
         "subject":     subject,
         "textContent": plain,
         "htmlContent": html,
+        "headers":     _list_unsub_headers(to),
     }).encode("utf-8")
     ok, code, body, capped = _post_with_retry(
         "https://api.brevo.com/v3/smtp/email",
@@ -1248,12 +1303,15 @@ def _send_via_mailgun(to: str, subject: str, plain: str, html: str) -> bool:
     import urllib.request, urllib.error, urllib.parse, base64 as _b64
     if not MAILGUN_API_KEY or "mailgun" in _exhausted_providers:
         return False
+    _unsub = _list_unsub_headers(to)
     data = urllib.parse.urlencode({
         "from":    f"{SENDER_NAME} <maya@{MAILGUN_DOMAIN}>",
         "to":      to,
         "subject": subject,
         "text":    plain,
         "html":    html,
+        "h:List-Unsubscribe":      _unsub["List-Unsubscribe"],
+        "h:List-Unsubscribe-Post": _unsub["List-Unsubscribe-Post"],
     }).encode("utf-8")
     creds = _b64.b64encode(f"api:{MAILGUN_API_KEY}".encode()).decode()
     req = urllib.request.Request(
@@ -1291,6 +1349,8 @@ def _send_via_gmail(to: str, subject: str, plain: str, html: str) -> bool:
         msg["To"] = to
         msg["From"] = f"{SENDER_NAME} <{SENDER_EMAIL}>"
         msg["Subject"] = subject
+        for _h, _v in _list_unsub_headers(to).items():
+            msg[_h] = _v
         msg.attach(email.mime.text.MIMEText(plain, "plain"))
         msg.attach(email.mime.text.MIMEText(html,  "html"))
         raw = _b64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -1337,9 +1397,13 @@ def send_email(to: str, subject: str, plain: str, html: str) -> tuple[bool, str]
     if "brevo2" not in _exhausted_providers and BREVO_API_KEY_2:
         if _send_via_brevo2(to, subject, plain, html):
             return True, "brevo2"
-    if "sendgrid" not in _exhausted_providers and SENDGRID_API_KEY:
-        if _send_via_sendgrid(to, subject, plain, html):
-            return True, "sendgrid"
+    # SendGrid REMOVED from the chain 2026-07-30 — its free trial ended (0 credits/day,
+    # no reset). Brevo (2×300/day, non-expiring free) is the backbone instead.
+    # TO RE-ENABLE with a fresh SendGrid account: (1) set SENDGRID_API_KEY in ~/.zshrc
+    # to the new key, (2) uncomment the 3 lines below.
+    # if "sendgrid" not in _exhausted_providers and SENDGRID_API_KEY:
+    #     if _send_via_sendgrid(to, subject, plain, html):
+    #         return True, "sendgrid"
     if "sendpulse" not in _exhausted_providers and (SENDPULSE_API_KEY or SENDPULSE_CLIENT_ID):
         if _send_via_sendpulse(to, subject, plain, html):
             return True, "sendpulse"
@@ -1650,7 +1714,7 @@ def main():
     failed_count = 0
 
     for i, prospect in enumerate(prospects):
-        name     = prospect.get("name", "").strip()
+        name     = clean_business_name(prospect.get("name", ""))
         category = prospect.get("category", "").strip()
         phone    = prospect.get("phone", "").strip()
         page_id  = prospect.get("notion_page_id", "")
@@ -1664,7 +1728,8 @@ def main():
         lead_city     = prospect.get("city", "Philadelphia, PA")
         rating        = prospect.get("rating", "")
         review_count  = prospect.get("review_count", "")
-        mockup_url    = _get_mockup_url(name, category, phone, lead_city, prospect.get("address", ""))
+        mockup_url    = _get_mockup_url(name, category, phone, lead_city, prospect.get("address", ""),
+                                        prospect.get("website", ""))
         if mockup_url:
             print(f"  Mockup  : {mockup_url}")
         recipient_email = prospect.get("email", "").strip()

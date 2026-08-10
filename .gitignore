@@ -55,3 +55,24 @@ RECONCILE_ALERT_*.txt
 gmail_send_log_*.csv
 .gmail_send_state.json
 .enrich_negative_cache.json
+
+# Prospect data that had never been ignored (added 2026-08-10). This repo is
+# public, and every one of these carries real business email addresses or phone
+# numbers — they were sitting untracked, one `git add .` away from publication.
+.bounce_backups/
+.backup_em_fix_*/
+call_sheets/
+clicker_second_touch_log_*.csv
+jasmine_call_list_*.csv
+warm_clickers_*.csv
+recontact_*.csv
+replies_need_review.csv
+verified_sites.csv
+health_log.csv
+reconcile_log.csv
+phl_licenses_state.json
+.call_state.json
+.seen_sales.json
+
+# Voice agent — holds ElevenLabs/Twilio config, kept out until reviewed
+voice_agent/
