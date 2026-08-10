@@ -729,7 +729,13 @@ def _get_mockup_url(name: str, category: str, phone: str = "", city: str = "Phil
         _sys.path.insert(0, str(_SCRIPT_DIR))
         from mockup_uploader import upload_mockup
         return upload_mockup(name, category, phone, city, address, website)
-    except Exception:
+    except (Exception, SystemExit) as e:
+        # SystemExit is deliberately included: it is a BaseException, so a
+        # sys.exit() anywhere in the mockup path used to escape this handler and
+        # kill the sender mid-run rather than costing one preview. Print it —
+        # a mockup that silently stops being generated is a real revenue bug,
+        # since the preview link is the whole pitch.
+        print(f"  [mockup] skipped for {name}: {e}")
         return ""
 
 

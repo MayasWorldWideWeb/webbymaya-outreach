@@ -18,16 +18,33 @@ _SITE_ENV = Path.home() / "Projects/maya-studio-shine/.env"
 
 
 def _lead_endpoint() -> tuple:
+    """Where a published preview posts its captured leads.
+
+    Reads the live site's own .env, falling back to the environment so this
+    works off Maya's Mac — a CI runner has no ~/Projects checkout.
+    """
     vals = {}
     if _SITE_ENV.exists():
         for line in _SITE_ENV.read_text().splitlines():
             if "=" in line and not line.strip().startswith("#"):
                 k, v = line.split("=", 1)
                 vals[k.strip()] = v.strip().strip('"').strip("'")
-    url = vals.get("VITE_SUPABASE_URL") or vals.get("SUPABASE_URL", "")
-    key = vals.get("VITE_SUPABASE_PUBLISHABLE_KEY") or vals.get("SUPABASE_PUBLISHABLE_KEY", "")
+    url = (vals.get("VITE_SUPABASE_URL") or vals.get("SUPABASE_URL")
+           or os.environ.get("VITE_SUPABASE_URL") or os.environ.get("SITE_SUPABASE_URL", ""))
+    key = (vals.get("VITE_SUPABASE_PUBLISHABLE_KEY") or vals.get("SUPABASE_PUBLISHABLE_KEY")
+           or os.environ.get("VITE_SUPABASE_PUBLISHABLE_KEY")
+           or os.environ.get("SITE_SUPABASE_PUBLISHABLE_KEY", ""))
     if not url or not key:
-        raise SystemExit(f"Cannot build preview lead form: no Supabase URL/anon key in {_SITE_ENV}")
+        # RuntimeError, NOT SystemExit. This used to raise SystemExit, which
+        # inherits from BaseException and so walked straight through
+        # batch_send_outreach._get_mockup_url's `except Exception` and killed
+        # the whole sender on the first prospect — silently, on 08-10, in CI,
+        # where ~/Projects/maya-studio-shine/.env can never exist. A missing
+        # lead form should cost that preview, not the entire day's send.
+        raise RuntimeError(
+            f"Cannot build preview lead form: no Supabase URL/anon key in {_SITE_ENV} "
+            "or in VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY."
+        )
     return f"{url}/rest/v1/contact_messages", key
 
 SUPABASE_URL = "https://ycsauzlqsjjbusugshpz.supabase.co"

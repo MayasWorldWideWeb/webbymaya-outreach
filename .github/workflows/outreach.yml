@@ -129,6 +129,12 @@ jobs:
           BREVO_SMTP_LOGIN:    ${{ secrets.BREVO_SMTP_LOGIN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # Where a published preview posts captured leads. mockup_uploader
+          # normally reads these from ~/Projects/maya-studio-shine/.env, which
+          # a runner does not have — without them every cloud email would go
+          # out with no preview link, and the preview is the entire pitch.
+          SITE_SUPABASE_URL:             ${{ secrets.SITE_SUPABASE_URL }}
+          SITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SITE_SUPABASE_PUBLISHABLE_KEY }}
         run: python3 scheduled_send.py --sms-limit ${{ github.event.inputs.sms_limit || '200' }} --email-limit ${{ github.event.inputs.email_limit || '50' }}
 
       # A run that sends nothing must not report success. scheduled_send exits 0
@@ -138,15 +144,33 @@ jobs:
         run: |
           python3 - <<'PY'
           import csv, datetime, pathlib, sys
-          p = pathlib.Path(f"send_log_{datetime.date.today().isoformat()}.csv")
+          today = datetime.date.today().isoformat()
+
+          # How many the sender SHOULD have had. Without this the check passes
+          # whenever the sender dies before writing a log — which is exactly how
+          # the 08-10 run reported success after sending nothing at all.
+          ready = 0
+          enriched = pathlib.Path(f"prospects_{today}_enriched.csv")
+          if enriched.exists():
+              ready = sum(1 for r in csv.DictReader(enriched.open(newline=""))
+                          if (r.get("email") or "").strip())
+
+          p = pathlib.Path(f"send_log_{today}.csv")
           if not p.exists():
-              print("No send log — nothing was attempted today."); sys.exit(0)
+              if ready:
+                  sys.exit(f"{ready} prospect(s) had emails but no send log was written — "
+                           "the sender died before sending. Not reporting success.")
+              print("No prospects with emails today — nothing to send.")
+              sys.exit(0)
+
           rows = list(csv.DictReader(p.open(newline="")))
           sent = sum(1 for r in rows if r.get("status") == "sent")
           failed = sum(1 for r in rows if r.get("status") == "failed")
-          print(f"sent={sent} failed={failed}")
+          print(f"ready={ready} sent={sent} failed={failed}")
           if failed and not sent:
               sys.exit(f"Every send failed ({failed}/{failed}). Provider is down — not reporting success.")
+          if ready and not rows:
+              sys.exit(f"{ready} prospect(s) were ready but the send log is empty.")
           PY
 
       - name: Save zone state
