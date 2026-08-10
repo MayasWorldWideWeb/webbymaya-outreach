@@ -81,6 +81,71 @@ FETCH_DELAY     = 0.3
 
 _SCRIPT_DIR = Path(__file__).parent
 
+# ---------------------------------------------------------------------------
+# Cost controls (added 2026-08-09)
+# ---------------------------------------------------------------------------
+# The pipeline targets businesses with NO website — and you cannot scrape an
+# email off a site that doesn't exist. A typical run is ~537 prospects of which
+# ~518 are has_website="No", so 96% of the fetch/render work was structurally
+# guaranteed to return nothing. Three guards fix that:
+#   1. WEBSITE GATE   — skip has_website="No" rows entirely (--all to override)
+#   2. NEGATIVE CACHE — never re-look-up a business that already came up empty
+#   3. NO BROWSER     — Playwright is opt-in via --render, not the default
+# Together these cut a daily run from ~500 page fetches + browser launches to
+# roughly 20 plain HTTP GETs.
+
+NEGATIVE_CACHE_PATH = _SCRIPT_DIR / ".enrich_negative_cache.json"
+NEGATIVE_CACHE_DAYS = 60          # re-try a dead business only after this long
+
+# One pooled session for every worker — reuses TCP/TLS connections instead of
+# renegotiating per request.
+_SESSION = requests.Session()
+_SESSION.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+})
+
+
+def _has_own_website(row: dict) -> bool:
+    """True if this business has something we could actually scrape.
+
+    find_prospects.py writes has_website as "No" / "Yes - dead" / "Yes - social"
+    / "Yes". Only "No" with no URL is hopeless; a dead or social site still
+    often carries a contact address, so those stay in."""
+    site = (row.get("website") or "").strip()
+    if site.startswith("http"):
+        return True
+    return not (row.get("has_website") or "").strip().lower().startswith("no")
+
+
+def _load_negative_cache() -> dict:
+    """{normalized business name: iso date last searched with no result}"""
+    try:
+        import json
+        return json.loads(NEGATIVE_CACHE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_negative_cache(cache: dict) -> None:
+    try:
+        import json
+        NEGATIVE_CACHE_PATH.write_text(json.dumps(cache, indent=0, sort_keys=True))
+    except Exception:
+        pass
+
+
+def _negative_cache_is_fresh(stamp: str) -> bool:
+    from datetime import datetime, timedelta
+    try:
+        return datetime.fromisoformat(stamp) > datetime.now() - timedelta(days=NEGATIVE_CACHE_DAYS)
+    except Exception:
+        return False
+
 
 def _norm_business_name(name: str) -> str:
     """Normalize a business name for cross-run dedup: strip HTML, drop
@@ -147,6 +212,30 @@ _PERSONAL_DOMAINS = {
 }
 
 
+# Generic industry words + common first names. These are NOT distinctive enough
+# to prove an email belongs to a business — "beauty" matching "mybeautyexchange"
+# or "richard" matching "richardbolesfuneralservice" are false positives that let
+# a scraped, unrelated address (e.g. a funeral home's email on a salon) slip in.
+_GENERIC_NAME_WORDS = {
+    # industry / descriptors
+    "salon", "salons", "nails", "spa", "hair", "barber", "barbers", "beauty",
+    "studio", "studios", "shop", "store", "boutique", "cafe", "coffee",
+    "restaurant", "grill", "kitchen", "pizza", "pizzeria", "bakery", "diner",
+    "auto", "automotive", "repair", "service", "services", "fitness", "gym",
+    "cleaning", "cleaners", "landscaping", "photography", "dental", "dentist",
+    "medical", "clinic", "center", "centre", "group", "company", "family",
+    "home", "homes", "house", "total", "image", "quality", "professional",
+    "best", "premier", "elite", "prime", "first", "local", "philly",
+    "philadelphia", "jersey", "incorporated",
+    # common first names
+    "richard", "robert", "michael", "william", "david", "james", "john",
+    "joseph", "thomas", "charles", "steven", "kevin", "brian", "george",
+    "edward", "ronald", "anthony", "jason", "jeffrey", "nicholas", "frank",
+    "mary", "patricia", "jennifer", "linda", "elizabeth", "susan", "jessica",
+    "sarah", "karen", "nancy", "maria", "angela", "donna", "michelle",
+}
+
+
 def _email_belongs_to_biz(email: str, name: str) -> bool:
     """Return True if the email is plausibly from this business."""
     domain = email.split("@")[-1].lower().rstrip(".")
@@ -155,9 +244,11 @@ def _email_belongs_to_biz(email: str, name: str) -> bool:
         return True
     # Strip TLD(s) to get the brand part of the domain
     domain_brand = re.sub(r"\.[a-z]{2,6}(\.[a-z]{2})?$", "", domain).lower()
-    # Tokenise business name — words of 5+ chars to avoid short coincidental matches
-    name_words = [w.lower() for w in re.split(r"\W+", name) if len(w) >= 5]
-    # Accept if any name word appears in the domain brand (or vice-versa)
+    # Tokenise business name — words of 5+ chars, minus generic/common words, so
+    # only a DISTINCTIVE brand token can vouch for the domain.
+    name_words = [w.lower() for w in re.split(r"\W+", name)
+                  if len(w) >= 5 and w.lower() not in _GENERIC_NAME_WORDS]
+    # Accept if any distinctive name word appears in the domain brand (or vice-versa)
     for word in name_words:
         if word in domain_brand or domain_brand in word:
             return True
@@ -209,7 +300,7 @@ def extract_emails_from_text(text: str) -> list[str]:
     return list(dict.fromkeys(results))
 
 
-def score_email(email: str) -> int:
+def score_email(email: str, name: str = "") -> int:
     score = 0
     for pattern in PREFER_PATTERNS:
         if re.search(pattern, email, re.IGNORECASE):
@@ -220,26 +311,62 @@ def score_email(email: str) -> int:
         score -= 5
     if re.match(r"^(info|contact|hello|hi|booking|reservations|owner|manager)", local, re.IGNORECASE):
         score += 5
+    # Strongly prefer the business's OWN custom domain over a generic free inbox —
+    # an email on their own domain is the most reliable, deliverable address.
+    domain = email.split("@")[-1].lower()
+    if name and domain not in _PERSONAL_DOMAINS:
+        brand = re.sub(r"\.[a-z]{2,6}(\.[a-z]{2})?$", "", domain)
+        toks = [w.lower() for w in re.split(r"\W+", name)
+                if len(w) >= 5 and w.lower() not in _GENERIC_NAME_WORDS]
+        if any(t in brand for t in toks):
+            score += 20
     return score
 
 
-def best_email(candidates: list[str]) -> str:
+def best_email(candidates: list[str], name: str = "") -> str:
     if not candidates:
         return ""
-    return max(candidates, key=score_email)
+    return max(candidates, key=lambda e: score_email(e, name))
 
 # ---------------------------------------------------------------------------
 # Fetching helpers
 # ---------------------------------------------------------------------------
 
 def safe_fetch(url: str) -> str:
+    """Plain HTTP GET on the shared pooled session.
+
+    Streams and caps the body at 512 KB — some 'contact' pages are multi-MB of
+    inlined base64 images, and parsing those was a large part of the old CPU
+    cost for zero extra emails."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-        if resp.ok and "text" in resp.headers.get("content-type", ""):
-            return resp.text
+        resp = _SESSION.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True, stream=True)
+        if not resp.ok or "text" not in resp.headers.get("content-type", ""):
+            resp.close()
+            return ""
+        body = resp.raw.read(512_000, decode_content=True) or b""
+        resp.close()
+        return body.decode(resp.encoding or "utf-8", errors="replace")
     except Exception:
         pass
     return ""
+
+
+def _emails_from_html(html: str, name: str) -> list[str]:
+    """Pull business-matching emails out of a page.
+
+    Uses a regex pass first and only falls back to BeautifulSoup when the raw
+    scan finds nothing — building a full DOM for every page was pure overhead
+    on the ~90% of pages that have the address sitting in a mailto: link."""
+    if not html:
+        return []
+    hits = [e for e in extract_emails_from_text(html) if _email_belongs_to_biz(e, name)]
+    if hits:
+        return hits
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    return [e for e in extract_emails_from_text(soup.get_text(separator=" "))
+            if _email_belongs_to_biz(e, name)]
 
 
 def should_skip_url(url: str) -> bool:
@@ -253,40 +380,72 @@ def should_skip_url(url: str) -> bool:
 # Core enrichment logic for one business
 # ---------------------------------------------------------------------------
 
+# A single browser is shared by every worker that needs one, instead of the old
+# behaviour of launching (and tearing down) a full Chromium per URL. Only built
+# if --render is passed; most runs never touch it.
+_BROWSER_LOCK = threading.Lock()
+_BROWSER = None
+_BROWSER_PW = None
+RENDER_ENABLED = False
+
+
+def _shared_browser():
+    global _BROWSER, _BROWSER_PW
+    if _BROWSER is None:
+        _BROWSER_PW = _pw().start()
+        _BROWSER = _BROWSER_PW.chromium.launch(headless=True)
+    return _BROWSER
+
+
+def close_browser() -> None:
+    global _BROWSER, _BROWSER_PW
+    try:
+        if _BROWSER is not None:
+            _BROWSER.close()
+        if _BROWSER_PW is not None:
+            _BROWSER_PW.stop()
+    except Exception:
+        pass
+    _BROWSER, _BROWSER_PW = None, None
+
+
 def _playwright_fetch(url: str) -> str:
-    """Render a JS-heavy page with Playwright and return its text content."""
-    if not _PLAYWRIGHT_OK:
+    """Render a JS-heavy page and return its text. Opt-in only (--render)."""
+    if not (RENDER_ENABLED and _PLAYWRIGHT_OK):
         return ""
     try:
-        with _pw() as pw:
-            browser = pw.chromium.launch(headless=True)
-            page    = browser.new_page()
-            page.goto(url, timeout=15000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
-            text = page.inner_text("body")
-            browser.close()
-            return text
+        with _BROWSER_LOCK:
+            page = _shared_browser().new_page()
+            try:
+                page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                page.wait_for_timeout(1500)
+                return page.inner_text("body")
+            finally:
+                page.close()
     except Exception:
         return ""
 
 
-def find_email_for_business(name: str, city: str, website: str = "") -> str:
-    # ── 0. Try the business's own website first (most reliable) ──────────────
-    if website and website.startswith("http"):
-        for path in ["", "/contact", "/contact-us", "/about"]:
-            html = safe_fetch(website.rstrip("/") + path)
-            if html:
-                soup = BeautifulSoup(html, "html.parser")
-                for tag in soup(["script", "style"]):
-                    tag.decompose()
-                candidates = [
-                    e for e in extract_emails_from_text(soup.get_text(separator=" "))
-                    if _email_belongs_to_biz(e, name)
-                ]
-                if candidates:
-                    return best_email(candidates)
+def find_email_for_business(name: str, city: str, website: str = "",
+                            use_search: bool = False) -> str:
+    """Find a contact email. Cheapest source first, and stop at the first hit.
 
-    # ── 1. DuckDuckGo search ──────────────────────────────────────────────────
+    The business's own site is both the most reliable source and the cheapest,
+    so it runs first and short-circuits. Search-engine and Yelp fallbacks are
+    off by default — both are actively blocked from this machine, so they only
+    ever contributed timeouts."""
+    # ── 0. The business's own website — most reliable, and usually the only hit
+    if website and website.startswith("http"):
+        base = website.rstrip("/")
+        for path in ["", "/contact", "/contact-us", "/about"]:
+            candidates = _emails_from_html(safe_fetch(base + path), name)
+            if candidates:
+                return best_email(candidates, name)
+
+    if not use_search:
+        return ""
+
+    # ── 1. Search-engine fallback (opt-in via --search) ───────────────────────
     query = f'"{name}" {city} contact email'
     urls = []
     try:
@@ -300,51 +459,32 @@ def find_email_for_business(name: str, city: str, website: str = "") -> str:
 
     for url in urls[:MAX_PAGES]:
         time.sleep(FETCH_DELAY)
-        html = safe_fetch(url)
-        if not html:
-            continue
-        soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style"]):
-            tag.decompose()
-        emails = [
-            e for e in extract_emails_from_text(soup.get_text(separator=" "))
-            if _email_belongs_to_biz(e, name)
-        ]
-        all_emails.extend(emails)
+        all_emails.extend(_emails_from_html(safe_fetch(url), name))
         if all_emails:
             break
 
-    # ── 2. Playwright fallback ────────────────────────────────────────────────
-    if not all_emails and _PLAYWRIGHT_OK and urls:
+    # ── 2. Rendered fallback (opt-in via --render) ────────────────────────────
+    if not all_emails and RENDER_ENABLED and _PLAYWRIGHT_OK and urls:
         for url in urls[:2]:
             time.sleep(FETCH_DELAY)
             text = _playwright_fetch(url)
             if text:
-                emails = [
+                all_emails.extend(
                     e for e in extract_emails_from_text(text)
                     if _email_belongs_to_biz(e, name)
-                ]
-                all_emails.extend(emails)
+                )
                 if all_emails:
                     break
 
     # ── 3. Yelp direct URL fallback ───────────────────────────────────────────
     if not all_emails:
         yelp_query = name.lower().replace(" ", "-") + "-" + city.lower().split(",")[0].replace(" ", "-")
-        yelp_url = f"https://www.yelp.com/biz/{yelp_query}"
         time.sleep(FETCH_DELAY)
-        html = safe_fetch(yelp_url)
-        if html:
-            soup = BeautifulSoup(html, "html.parser")
-            for tag in soup(["script", "style"]):
-                tag.decompose()
-            emails = [
-                e for e in extract_emails_from_text(soup.get_text(separator=" "))
-                if _email_belongs_to_biz(e, name)
-            ]
-            all_emails.extend(emails)
+        all_emails.extend(
+            _emails_from_html(safe_fetch(f"https://www.yelp.com/biz/{yelp_query}"), name)
+        )
 
-    return best_email(all_emails)
+    return best_email(all_emails, name)
 
 # ---------------------------------------------------------------------------
 # Progress tracker
@@ -389,6 +529,24 @@ def parse_args():
         "--dry-run", action="store_true",
         help="Print found emails without writing output file",
     )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Also look up businesses with no website (default: skip them — "
+             "there is nothing to scrape, and they are ~96%% of every run)",
+    )
+    parser.add_argument(
+        "--search", action="store_true",
+        help="Enable the DuckDuckGo + Yelp fallbacks (default: off — both are "
+             "blocked from this machine and only cost timeouts)",
+    )
+    parser.add_argument(
+        "--render", action="store_true",
+        help="Enable the headless-browser fallback (default: off — expensive)",
+    )
+    parser.add_argument(
+        "--no-cache", action="store_true",
+        help="Ignore the negative cache and re-look-up known-empty businesses",
+    )
     return parser.parse_args()
 
 
@@ -411,26 +569,47 @@ def main():
         for row in prospects:
             row.setdefault("email", "")
 
+    global RENDER_ENABLED
+    RENDER_ENABLED = args.render
+
     contacted_names = _load_contacted_names()
+    neg_cache = {} if args.no_cache else _load_negative_cache()
 
     to_enrich = []
-    skipped_contacted = 0
+    skipped_contacted = skipped_no_site = skipped_cached = 0
     for i, row in enumerate(prospects):
         if row.get("email", "").strip():
             continue                       # already has an email — nothing to enrich
-        if _norm_business_name(row.get("name", "")) in contacted_names:
+        norm = _norm_business_name(row.get("name", ""))
+        if norm in contacted_names:
             if "email_status" in fieldnames:
                 row["email_status"] = row.get("email_status", "") or "already_contacted"
             skipped_contacted += 1
             continue                       # already emailed in a prior run — don't waste a lookup
+        if not args.all and not _has_own_website(row):
+            if "email_status" in fieldnames:
+                row["email_status"] = row.get("email_status", "") or "no_website"
+            skipped_no_site += 1
+            continue                       # nothing to scrape — reach these by phone
+        if _negative_cache_is_fresh(neg_cache.get(norm, "")):
+            if "email_status" in fieldnames:
+                row["email_status"] = row.get("email_status", "") or "no_email_cached"
+            skipped_cached += 1
+            continue                       # came up empty recently — don't re-fetch
         to_enrich.append(i)
-    already_done = len(prospects) - len(to_enrich) - skipped_contacted
+    already_done = (len(prospects) - len(to_enrich)
+                    - skipped_contacted - skipped_no_site - skipped_cached)
 
     print(f"\nLoaded {len(prospects)} prospects.")
     if already_done:
         print(f"  {already_done} already have emails — skipping.")
     if skipped_contacted:
         print(f"  {skipped_contacted} already contacted in a prior run — skipping enrichment (dedup).")
+    if skipped_no_site:
+        print(f"  {skipped_no_site} have no website to scrape — skipping (use --all to override).")
+        print(f"     ^ these are your best leads. Reach them by phone: python3 call_list.py")
+    if skipped_cached:
+        print(f"  {skipped_cached} came up empty within the last {NEGATIVE_CACHE_DAYS} days — skipping (negative cache).")
     print(f"  Searching for emails for {len(to_enrich)} businesses "
           f"using {args.workers} parallel workers ...\n")
 
@@ -448,17 +627,32 @@ def main():
         if not name:
             progress.tick(False)
             return idx, ""
-        email = find_email_for_business(name, city, website=website)
+        email = find_email_for_business(name, city, website=website,
+                                        use_search=args.search)
         progress.tick(bool(email))
         if args.dry_run and email:
             print(f"    ✓ {name} → {email}")
         return idx, email
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(enrich_one, i): i for i in to_enrich}
-        for future in as_completed(futures):
-            idx, email = future.result()
-            prospects[idx]["email"] = email
+    try:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = {pool.submit(enrich_one, i): i for i in to_enrich}
+            for future in as_completed(futures):
+                idx, email = future.result()
+                prospects[idx]["email"] = email
+    finally:
+        close_browser()
+
+    # Remember the misses so tomorrow's run doesn't repeat them.
+    if not args.no_cache:
+        from datetime import datetime
+        today = datetime.now().isoformat(timespec="seconds")
+        for idx in to_enrich:
+            if not prospects[idx].get("email", "").strip():
+                nm = _norm_business_name(prospects[idx].get("name", ""))
+                if nm:
+                    neg_cache[nm] = today
+        _save_negative_cache(neg_cache)
 
     found = sum(1 for row in prospects if row.get("email", "").strip())
     print(f"\n✓ Enrichment complete: {found}/{len(prospects)} businesses have emails.")

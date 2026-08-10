@@ -58,11 +58,40 @@ echo "[setup] Syncing unsubscribes from Supabase..." >> "$LOG"
 $PYTHON "$SCRIPT_DIR/sync_unsubscribes.py" >> "$LOG" 2>&1
 
 echo "" >> "$LOG"
+# The suppression list is the one file that must never be lost — without it the
+# pipeline re-mails everyone who bounced, blocked, or unsubscribed. It was
+# silently truncated once, so keep a week of daily copies to restore from.
+if [ -s "$SCRIPT_DIR/bounce_log.csv" ]; then
+    mkdir -p "$SCRIPT_DIR/.bounce_backups"
+    cp "$SCRIPT_DIR/bounce_log.csv" "$SCRIPT_DIR/.bounce_backups/bounce_log_$TODAY.csv"
+    ls -t "$SCRIPT_DIR"/.bounce_backups/bounce_log_*.csv 2>/dev/null | tail -n +8 | xargs rm -f 2>/dev/null
+fi
+
 echo "[setup] Checking bounces..." >> "$LOG"
 $PYTHON "$SCRIPT_DIR/check_bounces.py" >> "$LOG" 2>&1
 
 # ── BACKGROUND: find → enrich → cold outreach (the long path) ───────────────
-(
+# ---------------------------------------------------------------------------
+# Cold acquisition (find → score → enrich → send) runs in GitHub Actions, not
+# here. The workflow .github/workflows/outreach.yml has been doing the same
+# find+enrich+send on a 13:00 UTC schedule this whole time, so every prospect
+# was being scraped twice a day — once on Maya's Mac and once in the cloud.
+# The scraping is the single heaviest thing this machine does, and the cloud
+# copy is free, so the local half is off by default.
+#
+# Everything below the cold block (replies, sales, follow-ups, health) still
+# runs locally — it's all API calls, no scraping.
+#
+#   LOCAL_COLD=1 bash run_daily.sh    # force the local cold pipeline back on
+LOCAL_COLD="${LOCAL_COLD:-0}"
+
+if [ "$LOCAL_COLD" != "1" ]; then
+    echo "" >> "$LOG"
+    echo "[cold] Skipped — cold acquisition runs in GitHub Actions (outreach.yml)." >> "$LOG"
+    echo "[cold] Set LOCAL_COLD=1 to run it here instead." >> "$LOG"
+fi
+
+[ "$LOCAL_COLD" = "1" ] && (
     echo "" >> "$LOG"
     echo "[cold] ── Cold Outreach Pipeline Started ──" >> "$LOG"
 
@@ -84,8 +113,23 @@ $PYTHON "$SCRIPT_DIR/check_bounces.py" >> "$LOG" 2>&1
     if [ $FIND_EXIT -ne 0 ]; then
         echo "[cold] No new prospects today — skipping cold outreach." >> "$LOG"
     else
+        # TODAY is captured when the script starts, but a run that straddles
+        # midnight (or a sleeping Mac) leaves the finder writing a file stamped
+        # with a different date — the exact-date match then silently skipped
+        # scoring AND enrichment, so a whole batch of prospects reached the
+        # sender with no email addresses. Prefer today's file, else the newest.
         PROSPECTS_CSV="$SCRIPT_DIR/prospects_$TODAY.csv"
-        if [ -f "$PROSPECTS_CSV" ]; then
+        if [ ! -f "$PROSPECTS_CSV" ]; then
+            PROSPECTS_CSV=$(ls -t "$SCRIPT_DIR"/prospects_????-??-??.csv 2>/dev/null | head -1)
+            [ -n "$PROSPECTS_CSV" ] && echo "[cold] prospects_$TODAY.csv missing — using $(basename "$PROSPECTS_CSV")" >> "$LOG"
+        fi
+        # Enrichment on a large file takes hours, and cold:4 waits on it. When
+        # the finder turns up nothing new, the fallback above hands back the
+        # same old file every day — re-enriching ~13k rows that were already
+        # done and blocking the send stage for the whole day. Only enrich when
+        # there is no up-to-date enriched output for this file.
+        ENRICHED="${PROSPECTS_CSV%.csv}_enriched.csv"
+        if [ -n "$PROSPECTS_CSV" ] && [ -f "$PROSPECTS_CSV" ] && [ ! "$ENRICHED" -nt "$PROSPECTS_CSV" ]; then
             echo "" >> "$LOG"
             echo "[cold:2] Scoring leads..." >> "$LOG"
             $PYTHON "$SCRIPT_DIR/score_leads.py" "$PROSPECTS_CSV" >> "$LOG" 2>&1
@@ -93,6 +137,8 @@ $PYTHON "$SCRIPT_DIR/check_bounces.py" >> "$LOG" 2>&1
             echo "" >> "$LOG"
             echo "[cold:3] Enriching emails (running while follow-ups send)..." >> "$LOG"
             $PYTHON "$SCRIPT_DIR/enrich_emails.py" --input "$PROSPECTS_CSV" >> "$LOG" 2>&1
+        elif [ -n "$PROSPECTS_CSV" ]; then
+            echo "[cold:2-3] $(basename "$ENRICHED") is already current — skipping scoring/enrichment." >> "$LOG"
         fi
 
         echo "" >> "$LOG"
@@ -113,7 +159,11 @@ COLD_PID=$!
 
 echo "" >> "$LOG"
 echo "[fu:1] Sending clicker follow-ups (48h after link click)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/clicker_followups.py" --limit 30 >> "$LOG" 2>&1   # warm-up (was 50)
+$PYTHON "$SCRIPT_DIR/clicker_followups.py" --limit 30 >> "$LOG" 2>&1
+
+echo "" >> "$LOG"
+echo "[fu:1b] Second touch to warm clickers (15+ days, validated, checkout-forward)..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/clicker_second_touch.py" --limit 25 >> "$LOG" 2>&1
 
 echo "" >> "$LOG"
 echo "[fu:2] Processing replies (hot leads → pricing, opt-outs → suppression)..." >> "$LOG"
@@ -124,12 +174,24 @@ echo "[fu:3] Responding to new form submissions..." >> "$LOG"
 $PYTHON "$SCRIPT_DIR/form_responder.py" >> "$LOG" 2>&1
 
 echo "" >> "$LOG"
-echo "[fu:4] Follow-up drip sequences (day 3 / 7 / 14)..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/followup_send.py" --limit 100 >> "$LOG" 2>&1   # warm-up (was 250)
+echo "[sales] Processing new Stripe website sales (alert Maya + send buyer intake)..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/check_sales.py" >> "$LOG" 2>&1
+
+echo "" >> "$LOG"
+echo "[offer] Keeping live offer.json in sync so previews never go stale..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/publish_offer.py" >> "$LOG" 2>&1
+
+echo "" >> "$LOG"
+echo "[fu:3b] Syncing hard bounces + blocked contacts to suppression list..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/sync_bounces.py" --days 45 >> "$LOG" 2>&1   # drop dead addrs before follow-ups
+
+echo "" >> "$LOG"
+echo "[fu:4] Follow-up drip (day 3 / 7 / 14, then monthly until reply-no or bounce)..." >> "$LOG"
+$PYTHON "$SCRIPT_DIR/followup_send.py" --limit 100 >> "$LOG" 2>&1
 
 echo "" >> "$LOG"
 echo "[fu:5] Seasonal campaign emails..." >> "$LOG"
-$PYTHON "$SCRIPT_DIR/seasonal_send.py" --limit 50 >> "$LOG" 2>&1   # warm-up (was 200)
+$PYTHON "$SCRIPT_DIR/seasonal_send.py" --limit 50 >> "$LOG" 2>&1
 
 # Re-engagement: Tue / Wed / Thu only
 if [ "$(date +%u)" = "2" ] || [ "$(date +%u)" = "3" ] || [ "$(date +%u)" = "4" ]; then

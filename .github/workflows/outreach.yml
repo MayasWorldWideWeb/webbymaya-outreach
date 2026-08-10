@@ -25,7 +25,7 @@ on:
 jobs:
   outreach:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -58,12 +58,25 @@ jobs:
           SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
         run: python3 scheduled_find.py
 
+      # Businesses that came up empty are remembered across runs so the next
+      # day doesn't re-search them. This is what keeps the job from creeping
+      # back toward the 30-minute timeout as the prospect pool grows.
+      - name: Restore enrichment negative cache
+        uses: actions/cache@v4
+        with:
+          path: .enrich_negative_cache.json
+          key: enrich-negcache-${{ github.run_id }}
+          restore-keys: enrich-negcache-
+
       - name: Enrich emails
         run: |
           TODAY=$(date +%Y-%m-%d)
           CSV="prospects_${TODAY}.csv"
           if [ -f "$CSV" ]; then
-            python3 enrich_emails.py --input "$CSV"
+            # --all --search: this is a free cloud runner, so keep the full
+            # yield here. ~95% of emails found come from the search fallback on
+            # businesses that have no website of their own to scrape.
+            python3 enrich_emails.py --input "$CSV" --all --search
           else
             echo "No prospects CSV for today, skipping"
           fi
