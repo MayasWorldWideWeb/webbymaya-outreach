@@ -63,8 +63,20 @@ def _headers(extra: dict | None = None) -> dict:
     return h
 
 
+class FetchFailed(Exception):
+    """The remote list could not be read. NOT the same as 'the remote is empty'."""
+
+
 def fetch_all(table: str, select: str) -> list:
-    """PostgREST caps a response at 1000 rows; walk it with Range headers."""
+    """PostgREST caps a response at 1000 rows; walk it with Range headers.
+
+    Raises rather than returning what it got. A partial or failed read used to
+    come back as a short list indistinguishable from a genuinely empty table,
+    and both callers draw dangerous conclusions from "empty": push() would treat
+    every local address as missing and re-insert all 823, and CI would send with
+    no suppression at all. Seen live on 08-12, when the Mac's DNS was down at
+    10:25 and this printed "Supabase holds 0 suppressed address(es)".
+    """
     out, offset = [], 0
     while True:
         req = urllib.request.Request(
@@ -74,8 +86,7 @@ def fetch_all(table: str, select: str) -> list:
         try:
             rows = json.loads(urllib.request.urlopen(req, timeout=20).read())
         except Exception as e:
-            print(f"  [warn] {table}: {e}")
-            return out
+            raise FetchFailed(f"{table}: {e}") from e
         out.extend(rows)
         if len(rows) < PAGE:
             return out
@@ -194,11 +205,20 @@ def main():
 
     local = read_local()
     print(f"[local] bounce_log.csv holds {len(local)} suppressed address(es).")
-    remote = pull()
 
-    # In CI this is the only source of the list. A failed fetch returns an empty
-    # dict, which would hand the sender a blank do-not-mail list and quietly
-    # re-mail every bounce and unsubscribe. Fail the job instead.
+    try:
+        remote = pull()
+    except FetchFailed as e:
+        # Never carry on as though the remote were empty. In CI that means
+        # sending with no do-not-mail list; on the Mac it means push() re-inserting
+        # the entire local list as "new" and duplicating it in Supabase.
+        print(f"[abort] Could not read the remote suppression list — {e}")
+        if local:
+            print(f"[abort] Local list of {len(local)} left untouched. Nothing pushed, nothing merged.")
+        raise SystemExit(1)
+
+    # In CI this is the only source of the list. A genuinely empty remote with no
+    # local file would hand the sender a blank do-not-mail list.
     if a.pull and not remote and not local:
         raise SystemExit(
             "[abort] Supabase returned no suppressions and there is no local list. "

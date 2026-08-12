@@ -38,6 +38,44 @@ MAX_FU_FAIL_RATE = 0.25             # >25% follow-up failures = problem
 
 TODAY = str(datetime.date.today())
 
+# Must match run_daily.sh: 0 means cold acquisition runs in GitHub Actions.
+LOCAL_COLD = os.environ.get("LOCAL_COLD", "0") == "1"
+
+# The cloud job is scheduled at 13:00 UTC and this check runs on the Mac in the
+# morning, so "did the cloud send TODAY" races the schedule and would false-alarm
+# every morning. Ask instead whether it has sent at all recently.
+CLOUD_WINDOW_HOURS = 30
+
+SUPABASE_URL = "https://ycsauzlqsjjbusugshpz.supabase.co"
+SUPABASE_ANON = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1"
+    "emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5"
+    "NTAzOTMxNH0._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI"
+)
+
+
+def _cloud_first_touch():
+    """(sent_count, last_sent_at, error) for cloud sends inside the window.
+
+    scheduled_send logs every send to Supabase email_log via sb.log_email, so
+    that table is the one place the Mac can see what the runner actually did.
+    """
+    since = (datetime.datetime.utcnow()
+             - datetime.timedelta(hours=CLOUD_WINDOW_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = (f"{SUPABASE_URL}/rest/v1/email_log"
+           f"?select=sent_at,status&status=eq.sent&sent_at=gte.{urllib.parse.quote(since)}"
+           f"&order=sent_at.desc&limit=1000")
+    req = urllib.request.Request(
+        url, headers={"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}"})
+    try:
+        rows = json.loads(urllib.request.urlopen(req, timeout=20).read())
+    except Exception as e:
+        # Report the failure — do NOT return 0, which reads as "the cloud is dead"
+        # and would swap one false alarm for another.
+        return 0, None, str(e)[:120]
+    last = rows[0]["sent_at"][:16].replace("T", " ") if rows else None
+    return len(rows), last, None
+
 
 def _rows(path):
     p = SCRIPT_DIR / path
@@ -79,11 +117,32 @@ def assess():
     b_sent, b_fail = _status_counts(batch)
     attempts = b_sent + b_fail
     fail_rate = (b_fail / attempts) if attempts else 0
-    lines.append(f"First-touch: {b_sent} sent, {b_fail} failed ({fail_rate*100:.0f}% fail)")
-    if b_sent < MIN_SENDS:
-        problems.append(f"❗ NO first-touch emails sent today ({b_sent}).")
-    elif fail_rate > MAX_FAIL_RATE:
-        problems.append(f"⚠️ First-touch failure rate {fail_rate*100:.0f}% (>{int(MAX_FAIL_RATE*100)}%).")
+    lines.append(f"First-touch (local): {b_sent} sent, {b_fail} failed ({fail_rate*100:.0f}% fail)")
+
+    if LOCAL_COLD:
+        # Cold acquisition runs here, so a local zero is a real zero.
+        if b_sent < MIN_SENDS:
+            problems.append(f"❗ NO first-touch emails sent today ({b_sent}).")
+        elif fail_rate > MAX_FAIL_RATE:
+            problems.append(f"⚠️ First-touch failure rate {fail_rate*100:.0f}% (>{int(MAX_FAIL_RATE*100)}%).")
+    else:
+        # Cold moved to GitHub Actions on 08-09. A local zero is now the CORRECT
+        # result, but this check kept reading the local send log and alerted by
+        # email AND SMS on 08-10, 08-11 and 08-12 — three straight days of crying
+        # wolf while the cloud was sending 49/day perfectly well. Ask the cloud.
+        cloud_sent, cloud_when, cloud_err = _cloud_first_touch()
+        if cloud_err:
+            lines.append(f"First-touch (cloud): could not check — {cloud_err}")
+            problems.append(f"⚠️ Could not verify cloud sending: {cloud_err}")
+        else:
+            lines.append(f"First-touch (cloud): {cloud_sent} sent, last at {cloud_when or 'never'}")
+            if cloud_sent < MIN_SENDS:
+                problems.append(
+                    f"❗ NO first-touch emails sent in the last {CLOUD_WINDOW_HOURS}h — "
+                    "the GitHub Actions job is not sending."
+                )
+        if fail_rate > MAX_FAIL_RATE and attempts:
+            problems.append(f"⚠️ Local first-touch failure rate {fail_rate*100:.0f}%.")
 
     # --- follow-ups ---
     fu = _rows(f"followup_log_{TODAY}.csv")
