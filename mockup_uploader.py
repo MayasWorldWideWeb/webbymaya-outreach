@@ -1282,6 +1282,9 @@ h2{{font-family:"Playfair Display",serif;font-size:clamp(2rem,4.5vw,3.2rem);font
   transition:opacity .2s,transform .15s;font-family:"Inter",sans-serif}}
 .lead-submit:hover{{opacity:.88;transform:translateY(-2px)}}
 .form-success{{display:none;color:{accent};font-weight:700;font-size:17px;margin-top:16px;text-align:center}}
+/* The purchase, deliberately secondary to the free ask above it. */
+.form-alt{{margin-top:18px;text-align:center;font-size:15px;opacity:.8}}
+.form-alt a{{color:{accent};font-weight:700;text-decoration:underline;text-underline-offset:3px}}
 
 /* FOOTER */
 footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
@@ -1483,19 +1486,27 @@ footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
 </section>
 
 <!-- LEAD FORM -->
+<!-- Every CTA on this page used to be the same ask: pay $499. Over 2026-07-30..08-12,
+     187 people clicked through to a preview and not one submitted anything. There was no
+     smaller step available — if you were curious, or the hours were wrong, or you wanted
+     to think, there was nothing to click. So the primary ask is now free, and it puts the
+     visitor in the position of expert about their own business rather than buyer. The
+     purchase is still here, one line below. -->
 <section class="form-sect" id="get-started">
   <div class="form-inner">
-    <p class="eyebrow">Free Preview — No Commitment</p>
-    <h2>Let's Build Your Website</h2>
-    <p>Leave your info and Maya will reach out within 24 hours.</p>
+    <p class="eyebrow">Free preview — nothing to sign</p>
+    <h2>What should I change?</h2>
+    <p>I built this from public info, so some of it is probably wrong — the hours, the photos,
+       services you don't actually offer. Tell me what to fix and I'll update it. No charge.</p>
     <form class="lead-form" id="leadForm">
-      <input type="text" name="name" placeholder="Your name" required>
-      <input type="email" name="email" placeholder="Your email" required>
-      <input type="tel" name="phone" placeholder="Your phone (optional)">
-      <textarea name="message" placeholder="Any questions or special requests? (optional)"></textarea>
-      <button type="submit" class="lead-submit">Yes, I Want This Website →</button>
+      <textarea name="message" placeholder="e.g. our hours are wrong, that's not our logo, we don't do that service" required></textarea>
+      <input type="text" name="contact" placeholder="Email or phone, so I can send it back" required>
+      <button type="submit" class="lead-submit">Send my changes →</button>
     </form>
-    <div class="form-success" id="formSuccess">✅ Got it! Maya will reach out within 24 hours.</div>
+    <p class="form-alt">Happy with it as-is?
+      <a href="{offer.CHECKOUT_URL}" data-offer-href="checkout" target="_blank" rel="noopener">Put it live — {offer.PRICE}</a>
+    </p>
+    <div class="form-success" id="formSuccess">✅ Got it — I'll make those changes and send it back.</div>
   </div>
 </section>
 
@@ -1507,8 +1518,8 @@ footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
 </footer>
 
 <div id="sticky-cta">
-  <div class="sticky-text">Like this design? <strong>Claim it for your business.</strong></div>
-  <a href="#get-started" class="sticky-btn">Get This Site — Starting at $499</a>
+  <div class="sticky-text">Built from public info — <strong>some of it is probably wrong.</strong></div>
+  <a href="#get-started" class="sticky-btn">Tell me what to change →</a>
 </div>
 <div class="watermark">Preview by <strong>WebByMaya</strong><br><a href="mailto:maya@webbymaya.com">maya@webbymaya.com</a></div>
 
@@ -1556,15 +1567,20 @@ document.getElementById('leadForm').addEventListener('submit', function(e) {{
   const form = this;
   const data = Object.fromEntries(new FormData(form));
   const biz  = '{name_js}';
+  // One contact field now, so it accepts either an email or a phone. The insert
+  // policy requires a non-empty email, so a phone-only reply still needs something
+  // in that column — the real contact detail is preserved in the message either way.
+  const contact = (data.contact || '').trim();
+  const isEmail = contact.indexOf('@') > -1;
   const details = [
     data.message ? data.message : 'Requested this website preview.',
-    data.phone ? ('Phone: ' + data.phone) : '',
+    isEmail ? '' : ('Contact: ' + contact),
     'Business: ' + biz,
-    'Source: mockup preview',
+    'Source: mockup preview — change request',
   ].filter(Boolean).join('\\n');
   const payload = {{
-    name:         (data.name || biz || 'Website preview lead').slice(0, 200),
-    email:        (data.email || '').slice(0, 320),
+    name:         (biz || 'Website preview lead').slice(0, 200),
+    email:        (isEmail ? contact : 'no-email@preview.webbymaya.com').slice(0, 320),
     project_type: ('Website preview — ' + biz).slice(0, 100),
     message:      details.slice(0, 5000),
     referrer:     location.href,
