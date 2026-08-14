@@ -49,6 +49,14 @@ def _lead_endpoint() -> tuple:
 
 SUPABASE_URL = "https://ycsauzlqsjjbusugshpz.supabase.co"
 SERVICE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTQ2MzMxNCwiZXhwIjoyMDk1MDM5MzE0fQ.0qJY5I3THWHxPVVM49D8Ov1pmH91gMYb5bIXOOKJy1c"
+# Anon, NOT SERVICE_KEY. This one gets embedded in every published preview page,
+# which is world-readable on GitHub Pages — the service key there would hand
+# anyone full read/write on the whole project.
+ANON_KEY_SELF = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inljc2F1"
+    "emxxc2pqYnVzdWdzaHB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NjMzMTQsImV4cCI6MjA5"
+    "NTAzOTMxNH0._rjYuGZch-CA4sfm2rV3lvs_ixDcQfNFg90KWsbe1HI"
+)
 BUCKET       = "mockups"
 PEXELS_KEY   = os.environ.get("PEXELS_API_KEY", "")
 PIXABAY_KEY  = os.environ.get("PIXABAY_API_KEY", "")
@@ -1024,6 +1032,9 @@ def generate_html_online(
     name_js    = name.replace("\\", "\\\\").replace("'", "\\'")
     cat_js     = (category or "").replace("'", "\\'")
     lead_endpoint, lead_anon_key = _lead_endpoint()
+    # Maya's own project — the one her scripts can read. See the second fetch in
+    # the lead-form handler for why a lead is written to two places.
+    sb_anon_key = ANON_KEY_SELF
 
     hero_url, g1_url, g2_url, g3_url, video_url = _get_images(category, biz_slug, name)
 
@@ -1599,6 +1610,28 @@ document.getElementById('leadForm').addEventListener('submit', function(e) {{
     if (!r.ok) throw new Error('HTTP ' + r.status);
     form.style.display = 'none';
     document.getElementById('formSuccess').style.display = 'block';
+    // Second copy, into the project Maya's own tooling can actually read.
+    // contact_messages lives in the website's Lovable project, whose anon key
+    // can INSERT but not SELECT — so a lead landing there is invisible to her:
+    // no notification, no dashboard, no way to look. Discovered 08-14, when a
+    // count that had been reporting 0 turned out to be 6. This copy is what
+    // check_preview_leads.py reads to alert her. Fire-and-forget: if it fails
+    // the lead is still safely in contact_messages.
+    fetch('https://ycsauzlqsjjbusugshpz.supabase.co/rest/v1/preview_leads', {{
+      method: 'POST',
+      headers: {{
+        'Content-Type':  'application/json',
+        'apikey':        '{sb_anon_key}',
+        'Authorization': 'Bearer {sb_anon_key}',
+        'Prefer':        'return=minimal',
+      }},
+      body: JSON.stringify({{
+        business:    biz,
+        contact:     contact,
+        message:     (data.message || ''),
+        preview_url: location.href,
+      }}),
+    }}).catch(function(){{}});
   }})
   .catch(function() {{
     // Never swallow a lead. Hand them a channel that always works.

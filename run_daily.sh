@@ -228,6 +228,13 @@ echo "[sales] Processing new Stripe website sales (alert Maya + send buyer intak
 run_stage 300 $PYTHON "$SCRIPT_DIR/check_sales.py"
 
 echo "" >> "$LOG"
+echo "[leads] Checking for preview-page replies (someone asked for a change)..." >> "$LOG"
+# The highest-intent signal in the whole pipeline: a business owner looked at
+# their preview and told us what's wrong with it. Until 08-14 these landed in a
+# table whose anon key cannot SELECT, so they were captured and never seen.
+run_stage 300 $PYTHON "$SCRIPT_DIR/check_preview_leads.py"
+
+echo "" >> "$LOG"
 echo "[offer] Keeping live offer.json in sync so previews never go stale..." >> "$LOG"
 run_stage 180 $PYTHON "$SCRIPT_DIR/publish_offer.py"
 
