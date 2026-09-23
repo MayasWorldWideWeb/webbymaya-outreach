@@ -4,7 +4,7 @@ generate_mockup.py — WebByMaya Mockup Generator
 Generates a polished, photo-rich one-page website preview for a prospect.
 
 USAGE
-    python3 generate_mockup.py "Fancy Nail Salon" --category "nail salon" --phone "215-555-0100" --city "Philadelphia, PA"
+    python3 generate_mockup.py "Fancy Nail Salon" --category "nail salon" --phone "215-555-0123"  # example only --city "Philadelphia, PA"
     python3 generate_mockup.py "Mike's Auto" --category "auto repair" --open
 """
 
@@ -177,9 +177,25 @@ REVIEW_NAMES = [
 ]
 
 def get_theme(category: str) -> dict:
-    cat = category.lower().strip()
+    cat = (category or "").lower().strip()
+    # An empty category used to match the FIRST key here, because "" is a
+    # substring of every string — so every business with no category yet
+    # rendered as a nail salon. Blank means unknown: use the neutral theme.
+    if not cat:
+        return DEFAULT_THEME
+    # Exact match first. Naive substring matching sent "bar" to "barbershop"
+    # and any short value to whichever key happened to contain it, so a bar
+    # rendered as a barber shop. Fall back to whole-word matching only.
+    if cat in THEMES:
+        return THEMES[cat]
+    cat_words = set(re.findall(r"[a-z]+", cat))
     for key, theme in THEMES.items():
-        if key in cat or cat in key:
+        key_words = set(re.findall(r"[a-z]+", key))
+        if key_words and key_words <= cat_words:
+            return theme
+    for key, theme in THEMES.items():
+        key_words = set(re.findall(r"[a-z]+", key))
+        if cat_words and cat_words <= key_words:
             return theme
     return DEFAULT_THEME
 
@@ -189,8 +205,10 @@ def slug(name: str) -> str:
 def stars(n: int) -> str:
     return "★" * n + "☆" * (5 - n)
 
-def generate_html(name: str, category: str, phone: str, city: str, theme: dict, fkeys: list, address: str = "") -> str:
-    phone_display = phone or "(215) 555-0100"
+def generate_html(name: str, category: str, phone: str, city: str, theme: dict, fkeys: list, address: str = "", rating: str = "", review_count: str = "") -> str:
+    # Never invent a phone number: a prospect seeing a fake number on a page
+    # about their own business stops trusting the whole pitch.
+    phone_display = (phone or "").strip()
     phone_href    = re.sub(r'[^0-9+]', '', phone_display)
     city_display  = city or "Philadelphia, PA"
     short_city    = city_display.split(',')[0]
@@ -198,6 +216,26 @@ def generate_html(name: str, category: str, phone: str, city: str, theme: dict, 
     json_name     = _json.dumps(name)
     _map_q        = (address or city_display).replace(' ', '+').replace(',', '%2C').replace('#', '%23')
     accent        = theme["accent"]
+    # Trust bar is built ONLY from figures we actually have. No invented
+    # customer counts, years in business, or star ratings.
+    _facts = []
+    try:
+        _r  = float(rating) if str(rating).strip() else 0.0
+        _rc = int(float(review_count)) if str(review_count).strip() else 0
+    except (TypeError, ValueError):
+        _r, _rc = 0.0, 0
+    if _r:
+        _facts.append((f"{_r:g}\u2605", "Google rating"))
+    if _rc:
+        _facts.append((f"{_rc}", "Google reviews"))
+    if address:
+        _facts.append((short_city, "Locally owned"))
+    trust_bar = ""
+    if len(_facts) >= 2:
+        _items = "".join(
+            f'<div class="trust-item"><div class="trust-num">{v}</div><div class="trust-label">{l}</div></div>'
+            for v, l in _facts)
+        trust_bar = f'<div class="trust" data-reveal>{_items}</div>' 
     dark          = theme["dark"]
     bg            = theme["bg"]
     emoji         = theme["emoji"]
@@ -736,12 +774,7 @@ def generate_html(name: str, category: str, phone: str, city: str, theme: dict, 
   </div>
 </section>
 
-<div class="trust" data-reveal>
-  <div class="trust-item"><div class="trust-num" data-count="500">0</div><div class="trust-label">Happy Customers</div></div>
-  <div class="trust-item"><div class="trust-num" data-count="10">0</div><div class="trust-label">Years in {short_city}</div></div>
-  <div class="trust-item"><div class="trust-num">5★</div><div class="trust-label">Google Rating</div></div>
-  <div class="trust-item"><div class="trust-num">Same Day</div><div class="trust-label">Response</div></div>
-</div>
+{trust_bar}
 
 <section id="services">
   <p class="section-eyebrow" data-reveal>What We Do</p>

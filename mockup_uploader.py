@@ -784,8 +784,22 @@ def _fetch_site_images(website: str) -> dict:
 
 def _cat(category: str) -> dict:
     cat = (category or "").lower().strip()
+    # "" is a substring of every key, so a blank category matched the first
+    # entry (nail salon) instead of falling through to DEFAULT_CAT.
+    if not cat:
+        return DEFAULT_CAT
+    # Exact match first; then whole-word containment. Plain substring matching
+    # resolved "bar" to "barbershop" and would mislabel any short category.
+    if cat in CATS:
+        return CATS[cat]
+    cat_words = set(re.findall(r"[a-z]+", cat))
     for k, t in CATS.items():
-        if k in cat or cat in k:
+        k_words = set(re.findall(r"[a-z]+", k))
+        if k_words and k_words <= cat_words:
+            return t
+    for k, t in CATS.items():
+        k_words = set(re.findall(r"[a-z]+", k))
+        if cat_words and cat_words <= k_words:
             return t
     return DEFAULT_CAT
 
@@ -1006,6 +1020,8 @@ def generate_html_online(
     city: str = "Philadelphia, PA",
     address: str = "",
     website: str = "",
+    rating: str = "",
+    review_count: str = "",
 ) -> str:
     theme      = _cat(category)
     # Per-business palette shift so two same-category sites never look identical.
@@ -1022,12 +1038,32 @@ def generate_html_online(
     reviews    = theme["reviews"]
     biz_slug   = _slug(name)
 
-    phone_d    = phone or "(215) 555-0100"
+    # No fake fallback number — see generate_mockup.py.
+    phone_d    = (phone or "").strip()
     phone_href = re.sub(r"[^0-9+]", "", phone_d)
     city_d     = city or "Philadelphia, PA"
     short_city = city_d.split(",")[0]
     addr_d     = address.strip() or city_d
     map_q      = addr_d.replace(" ", "+").replace(",", "%2C").replace("#", "%23")
+    # Real figures only — invented stats about someone\'s own business kill the pitch.
+    _facts = []
+    try:
+        _r  = float(rating) if str(rating).strip() else 0.0
+        _rc = int(float(review_count)) if str(review_count).strip() else 0
+    except (TypeError, ValueError):
+        _r, _rc = 0.0, 0
+    if _r:
+        _facts.append((f"{_r:g}\u2605", "Google rating"))
+    if _rc:
+        _facts.append((f"{_rc}", "Google reviews"))
+    if addr_d and addr_d != city_d:
+        _facts.append((short_city, "Locally owned"))
+    trust_bar = ""
+    if len(_facts) >= 2:
+        _items = "".join(
+            f'<div class="trust-item"><div class="trust-num">{v}</div><div class="trust-label">{l}</div></div>'
+            for v, l in _facts)
+        trust_bar = f'<div class="trust" data-reveal>{_items}</div>'
     # Escape for safe embedding in JS single-quoted strings
     name_js    = name.replace("\\", "\\\\").replace("'", "\\'")
     cat_js     = (category or "").replace("'", "\\'")
@@ -1369,18 +1405,13 @@ footer{{background:#060606;border-top:1px solid #161616;padding:36px 6%;
     <p class="hero-sub">{tagline} — proudly serving {short_city} and the surrounding area.</p>
     <div class="hero-btns">
       <a href="tel:{phone_href}" class="btn-primary">📞 {phone_d}</a>
-      <a href="#get-started" class="btn-outline">Get This Website →</a>
+      <a href="#get-started" class="btn-outline">Tell me what to change →</a>
     </div>
   </div>
 </section>
 
 <!-- TRUST BAR -->
-<div class="trust" data-reveal>
-  <div class="trust-item"><div class="trust-num">10+</div><div class="trust-label">Years Serving {short_city}</div></div>
-  <div class="trust-item"><div class="trust-num">500+</div><div class="trust-label">Happy Customers</div></div>
-  <div class="trust-item"><div class="trust-num">5★</div><div class="trust-label">Google Rating</div></div>
-  <div class="trust-item"><div class="trust-num">Same Day</div><div class="trust-label">Response</div></div>
-</div>
+{trust_bar}
 
 <!-- SERVICES -->
 <section id="services">
@@ -1697,12 +1728,14 @@ def upload_mockup(
     city: str = "Philadelphia, PA",
     address: str = "",
     website: str = "",
+    rating: str = "",
+    review_count: str = "",
 ) -> str:
     """Generate a mockup HTML file and push to GitHub Pages. Returns public URL or ''."""
     import subprocess, pathlib
     biz_slug = _token_slug(name)
     filename = f"{biz_slug}.html"
-    html     = generate_html_online(name, category, phone, city, address, website)
+    html     = generate_html_online(name, category, phone, city, address, website, rating, review_count)
 
     repo = pathlib.Path(GITHUB_REPO_PATH)
     # Clone if absent. A directory that exists but isn't a valid repo (metadata
@@ -1739,7 +1772,7 @@ if __name__ == "__main__":
     import sys
     name     = sys.argv[1] if len(sys.argv) > 1 else "Fancy Nail Salon"
     category = sys.argv[2] if len(sys.argv) > 2 else "nail salon"
-    phone    = sys.argv[3] if len(sys.argv) > 3 else "(215) 555-0100"
+    phone    = sys.argv[3] if len(sys.argv) > 3 else ""
     address  = sys.argv[4] if len(sys.argv) > 4 else "1234 Main St, Philadelphia, PA 19103"
     url = upload_mockup(name, category, phone, address=address)
     print(f"URL: {url}" if url else "Upload failed.")

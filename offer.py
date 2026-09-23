@@ -16,14 +16,16 @@ Canonical offer (decided 2026-07):
 # Physical postal address shown in every email footer (CAN-SPAM requirement).
 BUSINESS_ADDRESS = "7213 Montour St, Philadelphia, PA 19111"
 
-PRICE          = "$499"        # 1-page starter (headline price)
+PRICE            = "$250 to start"        # 1-page starter (headline price)
 PRICE_5PAGE    = "$799"        # 5-page
 PLAN           = "$150 now, $349 on launch"
+BALANCE_URL      = "https://buy.stripe.com/aFaaEW5Uu6Zph1C49l1ck0z"
+BALANCE_PRICE    = "$249 at launch"
 MONTHLY        = "$29/mo"      # hosting + maintenance, starts AFTER the free year
 
 # Live Stripe $499 Payment Link (created 2026-07 via jarvis/.env.local key).
 # Product: "WebByMaya Website — Starter". Price id: price_1TxulwAJ84QZjwZkOCGqwMYl
-CHECKOUT_URL   = "https://buy.stripe.com/8x23cudmW2J97r28pB1ck02"
+CHECKOUT_URL     = "https://buy.stripe.com/9B6cN45UucjJdPqfS31ck0y"
 BOOKING_URL    = "https://webbymaya.com/book"
 
 # What EVERY sale includes — this list must appear (in some form) in every pitch.

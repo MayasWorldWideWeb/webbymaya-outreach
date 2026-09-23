@@ -165,12 +165,51 @@ def _load_lead_status() -> dict:
                 out[e] = row
     return out
 
+_CATEGORY_BY_EMAIL = None   # dict once built; this Mac runs 3.9, so no PEP 604 unions
+
+def _category_for_email(email_addr: str) -> str:
+    """Category for this address from the prospect CSVs, or "" if unknown.
+
+    Joins on email only. Name-based joins have produced real mismatches here
+    (Steve's Automotive -> stevemaddendirect.com), and a preview built for the
+    wrong business is worse than a generic one.
+    """
+    global _CATEGORY_BY_EMAIL
+    if _CATEGORY_BY_EMAIL is None:
+        import glob as _glob
+        _CATEGORY_BY_EMAIL = {}
+        for _f in _glob.glob(str(SCRIPT_DIR / "*.csv")):
+            base = os.path.basename(_f)
+            if "log" in base or "bounce" in base:
+                continue
+            try:
+                with open(_f, newline="", encoding="utf-8", errors="ignore") as fh:
+                    rdr = csv.DictReader(fh)
+                    if not rdr.fieldnames or "email" not in rdr.fieldnames or "category" not in rdr.fieldnames:
+                        continue
+                    for _r in rdr:
+                        _e = (_r.get("email") or "").strip().lower()
+                        _c = (_r.get("category") or "").strip()
+                        if _e and _c:
+                            _CATEGORY_BY_EMAIL.setdefault(_e, _c)
+            except Exception:
+                continue
+    return _CATEGORY_BY_EMAIL.get((email_addr or "").strip().lower(), "")
+
+
 def try_generate_mockup(name: str, email_addr: str, lead_row: dict):
     """Generate a mockup for this lead. Returns local dashboard URL or None."""
     try:
         sys.path.insert(0, str(SCRIPT_DIR))
         import generate_mockup as gm
         category = lead_row.get("category", "").strip() if lead_row else ""
+        # The clicker send log has columns timestamp,email,name,status — there is
+        # no category column, so this was always "". An empty category used to
+        # render every one of these previews as a nail salon. Recover the real
+        # category from the prospect CSVs by EMAIL (exact join only — matching on
+        # business name has produced wrong pairings before).
+        if not category and email_addr:
+            category = _category_for_email(email_addr)
         # Stored categories are often the search term, not the business type
         # (e.g. a bakery found during a "nail salon" sweep) — re-derive from name
         category = normalize_category(name, category)
