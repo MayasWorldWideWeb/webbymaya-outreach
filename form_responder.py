@@ -85,21 +85,41 @@ if SUPABASE_SERVICE and SUPABASE_PROJECT and _jwt_ref(SUPABASE_SERVICE) != SUPAB
 
 # Reads need to see every submission, so they need the service role; the anon key
 # is subject to RLS and will quietly return an empty list.
+# The project book.tsx / client.ts hardcode. Kept alongside the .env one rather
+# than replacing it — which of the two a given form writes to has flipped before.
+_ALT_URL = "https://ycsauzlqsjjbusugshpz.supabase.co"
+_ALT_KEY = os.environ.get("SUPABASE_KEY_WBM", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
+if not _ALT_KEY:
+    # Not exported outside run_daily.sh, so read the service key dashboard.py
+    # already hardcodes. Without this the second backend silently never polls.
+    try:
+        import re as _re
+        _dash = (Path(__file__).parent / "dashboard.py").read_text()
+        _m = _re.search(r'SUPABASE_KEY_WBM\s*=\s*["\']([A-Za-z0-9._-]+)["\']', _dash)
+        if _m:
+            _ALT_KEY = _m.group(1)
+    except Exception:
+        pass
+if _ALT_KEY and _jwt_ref(_ALT_KEY) != "ycsauzlqsjjbusugshpz":
+    _ALT_KEY = ""
+
 _READ_KEY  = SUPABASE_SERVICE or SUPABASE_ANON
 _WRITE_KEY = SUPABASE_SERVICE or SUPABASE_ANON
 
 
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 
-def _sb_get(path: str, params: dict = None) -> list[dict]:
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
+def _sb_get(path: str, params: dict = None, base: str = None, key: str = None) -> list[dict]:
+    base = base or SUPABASE_URL
+    key = key or _READ_KEY
+    url = f"{base}/rest/v1/{path}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(
         url,
         headers={
-            "apikey":        _READ_KEY,
-            "Authorization": f"Bearer {_READ_KEY}",
+            "apikey":        key,
+            "Authorization": f"Bearer {key}",
             "Content-Type":  "application/json",
         },
     )
@@ -111,15 +131,17 @@ def _sb_get(path: str, params: dict = None) -> list[dict]:
         return []
 
 
-def _sb_patch(path: str, row_id: str, data: dict) -> bool:
-    url = f"{SUPABASE_URL}/rest/v1/{path}?id=eq.{row_id}"
+def _sb_patch(path: str, row_id: str, data: dict, base: str = None, key: str = None) -> bool:
+    base = base or SUPABASE_URL
+    key = key or _WRITE_KEY
+    url = f"{base}/rest/v1/{path}?id=eq.{row_id}"
     payload = json.dumps(data).encode()
     req = urllib.request.Request(
         url,
         data=payload,
         headers={
-            "apikey":        _WRITE_KEY,
-            "Authorization": f"Bearer {_WRITE_KEY}",
+            "apikey":        key,
+            "Authorization": f"Bearer {key}",
             "Content-Type":  "application/json",
             "Prefer":        "return=minimal",
         },
@@ -460,19 +482,99 @@ def _try_build_mockup(business_name: str, message: str) -> str:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _backend_columns(base, key):
+    """Columns INQUIRY_TABLE actually has on this backend, or None if unreachable.
+
+    A select naming a column the table lacks 400s, and _sb_get swallows the body
+    — which reads as "0 pending" and is indistinguishable from an empty table.
+    """
+    url = f"{base}/rest/v1/{INQUIRY_TABLE}?select=*&limit=1"
+    req = urllib.request.Request(
+        url, headers={"apikey": key, "Authorization": f"Bearer {key}",
+                      "Accept": "application/vnd.pgrst.object+json"})
+    try:
+        urllib.request.urlopen(req, timeout=10).read()
+    except urllib.error.HTTPError as e:
+        if e.code not in (404, 406):
+            return None
+    except Exception:
+        return None
+    # PostgREST exposes the shape via OPTIONS-free introspection on an empty
+    # result, so fall back to asking for one row without the object accept.
+    try:
+        r2 = urllib.request.Request(
+            f"{base}/rest/v1/{INQUIRY_TABLE}?select=*&limit=1",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"})
+        body = json.loads(urllib.request.urlopen(r2, timeout=10).read())
+        if body:
+            return set(body[0].keys())
+    except Exception:
+        return None
+    # Empty table: probe candidate columns individually.
+    found = set()
+    for c in ("id", "created_at", "name", "email", "message", "phone",
+              "business_name", "source", "project_type", "replied_at", "replied_by"):
+        try:
+            rq = urllib.request.Request(
+                f"{base}/rest/v1/{INQUIRY_TABLE}?select={c}&limit=1",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"})
+            urllib.request.urlopen(rq, timeout=10).read()
+            found.add(c)
+        except Exception:
+            pass
+    return found
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
-    rows = _sb_get(
-        INQUIRY_TABLE,
-        {"replied_at": "is.null",
-         "select": "id,created_at,name,email,message,project_type"},
-    )
+    # Submissions can land in EITHER backend: the site's own .env points at the
+    # Lovable project, while book.tsx and client.ts hardcode the ycsauz project.
+    # Polling only one silently drops whatever arrives in the other, so poll both.
+    backends = []
+    if SUPABASE_URL and _READ_KEY:
+        backends.append(("site-env", SUPABASE_URL, _READ_KEY, _WRITE_KEY))
+    if _ALT_URL and _ALT_KEY and _ALT_URL != SUPABASE_URL:
+        backends.append(("ycsauz", _ALT_URL, _ALT_KEY, _ALT_KEY))
 
-    pending = [r for r in rows if r.get("email")]
+    pending = []
     print(f"\nForm responder — {datetime.date.today()}")
+    for label, base, rkey, wkey in backends:
+        # The two projects' contact_messages differ. ycsauz has no project_type
+        # (400s the old select) and, more importantly, no replied_at — so a row
+        # there cannot be marked answered, and sending would re-send it every
+        # run. Probe the shape, narrow the select, and refuse to send what we
+        # cannot mark. Reading is always safe; only sending needs the columns.
+        cols = _backend_columns(base, rkey)
+        if cols is None:
+            print(f"  [{label}] unreachable — skipped")
+            continue
+        wanted = [c for c in ("id", "created_at", "name", "email", "message",
+                              "project_type", "business_name") if c in cols]
+        params = {"select": ",".join(wanted)}
+        can_mark = "replied_at" in cols
+        if can_mark:
+            params["replied_at"] = "is.null"
+        rows = _sb_get(INQUIRY_TABLE, params, base=base, key=rkey)
+        got = [r for r in rows if r.get("email")]
+        if not can_mark:
+            if got:
+                print(f"  [{label}] {len(got)} submission(s) BUT this project has no "
+                      f"replied_at column — cannot mark answered, so NOT sending "
+                      f"(would re-send every run). Listing only:")
+                for r in got:
+                    print(f"       {r.get('email')}  {str(r.get('created_at'))[:16]}  "
+                          f"{(r.get('name') or '').strip()}")
+            else:
+                print(f"  [{label}] 0 pending (read-only: no replied_at column)")
+            continue
+        print(f"  [{label}] {len(got)} pending")
+        for r in got:
+            r["_base"], r["_key"] = base, wkey
+        pending.extend(got)
+
     print(f"Pending form submissions: {len(pending)}")
     if args.dry_run:
         print("MODE: DRY RUN\n")
@@ -518,7 +620,7 @@ def main():
             _sb_patch(INQUIRY_TABLE, row_id, {
                 "replied_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "replied_by": "form_responder",
-            })
+            }, base=row.get("_base"), key=row.get("_key"))
         else:
             print("  Failed to send.")
 
