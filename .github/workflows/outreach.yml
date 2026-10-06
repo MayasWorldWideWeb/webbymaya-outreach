@@ -56,7 +56,6 @@ jobs:
 
       - name: Find prospects
         env:
-          YELP_API_KEY:  ${{ secrets.YELP_API_KEY }}
           SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
         run: python3 scheduled_find.py

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 scheduled_find.py — Auto-rotating lead finder for WebByMaya
-Runs Yelp + OSM + HERE + BBB + TomTom + Bing on zones in parallel.
+Runs OSM + BBB + Philly licenses (+ HERE/TomTom/Bing when keyed) on zones in parallel.
+Yelp is off: the trial key expired 2026-07 and every call errored. Set
+YELP_ENABLED=1 to bring it back if a paid key is ever added.
 """
 import csv
 import json
@@ -118,7 +120,10 @@ def main():
                 if ph: seen_phones.add(ph)
                 if nm: seen_names.append(nm)
 
-    for chunk_start in range(0, len(batch), PARALLEL_ZONES):
+    yelp_on = os.environ.get("YELP_ENABLED") == "1"
+    if not yelp_on:
+        print("[scheduled_find] Yelp disabled (trial expired) — skipping.")
+    for chunk_start in range(0, len(batch) if yelp_on else 0, PARALLEL_ZONES):
         chunk = batch[chunk_start : chunk_start + PARALLEL_ZONES]
         with ThreadPoolExecutor(max_workers=len(chunk)) as ex:
             futures = {ex.submit(run_yelp_zone, z, today): z for z in chunk}
