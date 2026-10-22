@@ -76,3 +76,4 @@ phl_licenses_state.json
 
 # Voice agent — holds ElevenLabs/Twilio config, kept out until reviewed
 voice_agent/
+.domain_site_cache.json

@@ -299,6 +299,58 @@ def verify_mailbox(email: str, timeout: int = 12) -> tuple[bool, str]:
 import atexit as _atexit
 _atexit.register(_save_verify_cache)
 
+
+# ── "No website" sanity check ────────────────────────────────────────────────
+# has_website comes from map listings, and "No" there only means the listing
+# has no website field. October sends went to Red Robin, Potbelly, Merry Maids,
+# a Georgia utility and delaware.gov on that basis — zero replies, and a pitch
+# to a chain reads as spam. If the address is at the business's own domain and
+# that domain serves a page, they have a website. Free-mail addresses (the
+# owner's gmail) are the real no-website leads and pass straight through.
+_FREEMAIL = {
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "aol.com",
+    "hotmail.com", "outlook.com", "live.com", "msn.com", "icloud.com", "me.com",
+    "mac.com", "comcast.net", "verizon.net", "att.net", "sbcglobal.net",
+    "protonmail.com", "proton.me", "gmx.com", "mail.com", "zoho.com",
+}
+_SITE_CACHE_PATH = Path(__file__).parent / ".domain_site_cache.json"
+try:
+    _SITE_CACHE = json.loads(_SITE_CACHE_PATH.read_text())
+except Exception:
+    _SITE_CACHE = {}
+
+
+def domain_has_site(email: str) -> bool:
+    """True if the email's own domain serves a web page (so they have a site)."""
+    domain = (email or "").strip().lower().rsplit("@", 1)[-1]
+    if not domain or domain in _FREEMAIL:
+        return False
+    if domain in _SITE_CACHE:
+        return _SITE_CACHE[domain]
+    import urllib.request, urllib.error
+    found = False
+    for url in (f"https://{domain}", f"https://www.{domain}", f"http://{domain}"):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                if r.status < 400 and len(r.read(4096)) > 512:
+                    found = True
+                    break
+        except urllib.error.HTTPError as e:
+            # A bot wall (403/429/503 from Cloudflare and the like) is still a
+            # web server answering for the domain. Only a missing page is not.
+            if e.code != 404:
+                found = True
+                break
+        except Exception:
+            continue
+    _SITE_CACHE[domain] = found
+    try:
+        _SITE_CACHE_PATH.write_text(json.dumps(_SITE_CACHE))
+    except Exception:
+        pass
+    return found
+
 # Platform/SaaS domains that forward to the software company, not the business owner
 SKIP_DOMAINS = {
     "fresha.com", "birdeye.com", "nailsalonbeauty.com", "thryv.com",
@@ -1709,6 +1761,10 @@ def main():
     if args.website_filter == "none":
         prospects = [p for p in prospects if p.get("has_website", "").strip() == "No"]
         print(f"  After filter (no website): {len(prospects)} prospect(s).")
+        before = len(prospects)
+        prospects = [p for p in prospects if not domain_has_site(p.get("email", ""))]
+        print(f"  After domain check: {len(prospects)} prospect(s) "
+              f"({before - len(prospects)} actually have a website at their email domain).")
     elif args.website_filter == "bad":
         prospects = [p for p in prospects if p.get("has_website", "").strip().startswith("Yes -")]
         print(f"  After filter (bad/outdated site): {len(prospects)} prospect(s).")
