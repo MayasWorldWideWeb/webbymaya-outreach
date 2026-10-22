@@ -16,7 +16,7 @@ on:
       email_limit:
         description: 'Max emails to send'
         required: false
-        default: '50'
+        default: '25'
       dry_run:
         description: 'Dry run - find and enrich only, no sends'
         required: false
@@ -40,7 +40,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests beautifulsoup4 ddgs googlemaps twilio sendgrid
+        run: pip install requests beautifulsoup4 ddgs googlemaps twilio sendgrid dnspython
 
       - name: Load zone state
         env:
@@ -134,7 +134,7 @@ jobs:
           # out with no preview link, and the preview is the entire pitch.
           SITE_SUPABASE_URL:             ${{ secrets.SITE_SUPABASE_URL }}
           SITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SITE_SUPABASE_PUBLISHABLE_KEY }}
-        run: python3 scheduled_send.py --sms-limit ${{ github.event.inputs.sms_limit || '200' }} --email-limit ${{ github.event.inputs.email_limit || '50' }}
+        run: python3 scheduled_send.py --sms-limit ${{ github.event.inputs.sms_limit || '200' }} --email-limit ${{ github.event.inputs.email_limit || '25' }}
 
       # A run that sends nothing must not report success. scheduled_send exits 0
       # whether it sent 262 or 0, which is how a dead provider hid for weeks.

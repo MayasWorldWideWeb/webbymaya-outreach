@@ -244,7 +244,7 @@ run_stage 600 $PYTHON "$SCRIPT_DIR/sync_bounces.py" --days 45   # drop dead addr
 
 echo "" >> "$LOG"
 echo "[fu:4] Follow-up drip (day 3 / 7 / 14, then monthly until reply-no or bounce)..." >> "$LOG"
-run_stage 2400 $PYTHON "$SCRIPT_DIR/followup_send.py" --limit 100
+run_stage 2400 $PYTHON "$SCRIPT_DIR/followup_send.py" --limit 30
 
 echo "" >> "$LOG"
 echo "[fu:5] Seasonal campaign emails..." >> "$LOG"

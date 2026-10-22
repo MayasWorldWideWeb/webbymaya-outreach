@@ -126,12 +126,13 @@ def _first_name(business_name: str) -> str:
 FOLLOWUP_LOG = SCRIPT_DIR / f"followup_log_{datetime.date.today()}.csv"
 FOLLOWUP_STATE = Path.home() / ".webbymaaya/followup_state.json"
 
-# Which days trigger which follow-up number.
-# First 3 touches are fast (day 3 / 7 / 14); after that we check in ~monthly,
-# indefinitely, until the prospect replies "no" or the address bounces (both of
-# which land them on the shared suppression list, bounce_log.csv).
+# Which days trigger which follow-up number: day 3 / 7 / 14, then stop.
+# The old cadence kept mailing monthly forever. On 10-08..10-22 that was ~440
+# 5th-7th touches to people who had ignored four emails already, which is what
+# drags a sender into spam. Three follow-ups and done.
 SEQUENCE = {3: 1, 7: 2, 14: 3}
-MONTHLY_INTERVAL = 30            # days between check-ins after touch #3
+MONTHLY_INTERVAL = 30            # kept for _trigger_day; unused while MAX_FOLLOWUPS = 3
+MAX_FOLLOWUPS = 3
 
 def _trigger_day(num: int) -> int:
     """Day (since first contact) when follow-up `num` becomes due. Unbounded."""
@@ -194,7 +195,7 @@ Just wanted to make sure this didn't get lost — I put together a free website 
 
 Takes 30 seconds to look at: {cta_url}
 
-No commitment, no catch. If you like what you see, we can have it live in 7 days starting at $499 — free domain + 1 year of hosting included ($29/mo after year one).
+No commitment, no catch. If you like what you see, we can have it live in 7 days starting at $499.
 
 If the timing's off, no worries — just let me know.
 
@@ -205,7 +206,7 @@ WebByMaya.com"""
             _ep(f"Hey {first},")
             + _ep(f"Just wanted to make sure this didn't get lost — I put together a <strong>free website preview</strong> for {name} a few days ago.")
             + _ecta(cta_url, "&#128064;&nbsp;&nbsp;See Your Free Preview &rarr;")
-            + _ep("No commitment, no catch. If you like what you see, we can have it <strong>live in 7 days starting at $499</strong> — free domain + 1 year of hosting included ($29/mo after year one).")
+            + _ep("No commitment, no catch. If you like what you see, we can have it <strong>live in 7 days starting at $499</strong>.")
             + _ep("If the timing's off, no worries — just reply and let me know."),
             email=email,
         )
@@ -238,7 +239,7 @@ WebByMaya.com"""
 
 Your preview is still live here: {cta_url}
 
-Starting at $499. Live in 7 days. Free domain + 1 year of hosting included ($29/mo after year one).
+Starting at $499. Live in 7 days.
 
 — Maya
 WebByMaya.com"""
@@ -248,7 +249,7 @@ WebByMaya.com"""
             + _ep(hook)
             + _ep(closer)
             + _ecta(cta_url, f"View {name}&#39;s Preview &rarr;")
-            + _ep("<strong>Starting at $499. Live in 7 days. Free domain + 1 year of hosting included</strong> ($29/mo after year one)."),
+            + _ep("<strong>Starting at $499. Live in 7 days</strong>."),
             email=email,
         )
 
@@ -278,7 +279,7 @@ WebByMaya.com"""
 
 Just checking back in — I'd still love to get {name} online whenever the timing's right. The free preview I built is here if you'd like a look: {cta_url}
 
-Starting at $499, live in 7 days — free domain + 1 year of hosting included ($29/mo after year one). No rush at all.
+Starting at $499, live in 7 days. No rush at all.
 
 If you'd rather I stop checking in, just reply "stop" and I won't email again.
 
@@ -289,7 +290,7 @@ WebByMaya.com"""
             _ep(f"Hey {first},")
             + _ep(f"Just checking back in — I'd still love to get <strong>{name}</strong> online whenever the timing's right. The free preview I built is here if you'd like a look:")
             + _ecta(cta_url, "See Your Free Preview &rarr;")
-            + _ep("Starting at $499, live in 7 days — free domain + 1 year of hosting included ($29/mo after year one). No rush at all.")
+            + _ep("Starting at $499, live in 7 days. No rush at all.")
             + _ep("If you&#39;d rather I stop checking in, just reply &ldquo;stop&rdquo; and I won&#39;t email again."),
             email=email,
         )
@@ -411,7 +412,7 @@ def main():
         # Find the lowest follow-up number not yet sent; send it if it's due.
         fu_num = None
         n = 1
-        while n <= 200:                      # safety ceiling (~16 yrs of monthlies)
+        while n <= MAX_FOLLOWUPS:
             if not es.get(f"fu{n}"):
                 if days_since >= _trigger_day(n):
                     fu_num = n

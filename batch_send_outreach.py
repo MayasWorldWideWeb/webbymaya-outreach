@@ -261,7 +261,15 @@ def verify_mailbox(email: str, timeout: int = 12) -> tuple[bool, str]:
         import dns.resolver, smtplib
         _r = dns.resolver.Resolver()
         _r.lifetime = 5.0
-        mxs = sorted(_r.resolve(domain, "MX"), key=lambda r: r.preference)
+        try:
+            mxs = sorted(_r.resolve(domain, "MX"), key=lambda r: r.preference)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            # A domain that does not exist or takes no mail is a guaranteed
+            # hard bounce, not an ambiguous probe. Failing open here is where
+            # most of the bounces came from.
+            result = (False, "domain has no mail server")
+            _VERIFY_CACHE[email_l] = {"ok": result[0], "reason": result[1]}
+            return result
         mx_host = str(mxs[0].exchange).rstrip(".")
 
         srv = smtplib.SMTP(timeout=timeout)
