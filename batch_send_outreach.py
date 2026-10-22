@@ -689,43 +689,23 @@ _SUBJECT_CAT_OVERRIDE = {
                          "Quick question for {name}"],
 }
 
+# Plain, short subjects. The old angles ("customers can't find you",
+# "missing from Google") read as spam and were often untrue — the list
+# included chains with websites. Rotated by weekday so no two days match.
+_PLAIN_SUBJECTS = [
+    "{name} website",
+    "made something for {name}",
+    "quick question, {name}",
+    "{name} website preview",
+    "for {name}",
+]
+
+
 def get_subject(name: str, category: str) -> str:
-    """Return a subject line rotated by day of week (7 angles, category-specific)."""
+    """Return a short plain subject line rotated by weekday."""
     import datetime
-    cat  = normalize_category(name, category).strip().lower()
-    dow  = datetime.date.today().weekday()   # 0=Mon … 6=Sun
-
-    angles = _SUBJECT_CAT_OVERRIDE.get(cat)
-    if not angles:
-        # Try partial match against override keys
-        for key, angle_list in _SUBJECT_CAT_OVERRIDE.items():
-            if key in cat:
-                angles = angle_list
-                break
-    if not angles:
-        # Fall back to generic angles, injecting category hint where possible
-        tpl = _SUBJECT_MAP.get(cat)
-        if not tpl:
-            for key, t in _SUBJECT_MAP.items():
-                if key in cat:
-                    tpl = t
-                    break
-        if tpl:
-            # Build 7 variants around the category-specific wording
-            base = tpl.replace("{name}", "{name}")
-            angles = [
-                base,
-                "Your {name} customers can't find you — I made a site",
-                "{name} doesn't show up online — so I built this",
-                "A website preview for {name}",
-                "I put together a site for {name} — take a look",
-                "{name} is missing from Google — I built something",
-                "Quick question about {name}'s online presence",
-            ]
-        else:
-            angles = _SUBJECT_ANGLES
-
-    return angles[dow % len(angles)].replace("{name}", name)
+    dow = datetime.date.today().weekday()
+    return _PLAIN_SUBJECTS[dow % len(_PLAIN_SUBJECTS)].replace("{name}", name)
 
 # HTML template path — sits next to this script's parent directory
 _SCRIPT_DIR   = Path(__file__).parent
@@ -942,12 +922,18 @@ def _ecta(url: str, label: str, dark: bool = False) -> str:
 def build_email_body(name: str, category: str, phone: str = "", city: str = "Philadelphia, PA",
                      mockup_url: str = "", rating: str = "", review_count: str = "",
                      address: str = "", to_email: str = "") -> tuple[str, str]:
-    """Return (plain_text, html) tuple for the given business."""
+    """Return (plain_text, html) tuple for the given business.
+
+    Rewritten 2026-10-22. The old version was a designed HTML card with an
+    emoji button, "free" twice, a $29/mo hosting line that no longer matches
+    the pricing, and openers citing Yelp data the pipeline no longer uses.
+    ~1,100 delivered in two weeks, ~9% opened, zero replies. This one is short,
+    looks like a person typed it, and ends on a single yes/no question.
+    """
     import datetime as _dt, urllib.parse as _up
-    friendly      = _friendly_type(category)
-    cat           = (category or "").strip().lower()
-    neighborhood  = _neighborhood(city, address)
-    city_display  = city.split(",")[0].strip() if city else "your area"
+    friendly     = _friendly_type(category)
+    cat          = (category or "").strip().lower()
+    neighborhood = _neighborhood(city, address)
 
     try:
         r  = float(rating) if rating else 0.0
@@ -955,143 +941,60 @@ def build_email_body(name: str, category: str, phone: str = "", city: str = "Phi
     except (ValueError, TypeError):
         r, rc = 0.0, 0
 
-    # ── Opener — specific to their review situation ───────────────────────
-    if rc >= 100:
-        opener = f"I came across {name} on Yelp — {rc} reviews and a {r:g}-star rating. Impressive. But you don't have a website, which means all those happy customers can't send anyone new your way."
-    elif rc >= 30:
-        opener = f"I found {name} on Yelp — {rc} reviews, {r:g} stars. You've clearly built something real. The problem is, none of that shows up when someone searches for a {friendly} in {neighborhood}."
-    elif rc >= 5 and r >= 4.0:
-        opener = f"I noticed {name} on Yelp — {r:g} stars, {rc} reviews. You have happy customers, but no website means the next one can't find you."
+    if rc >= 10 and r >= 4.0:
+        noticed = (f"I came across {name} ({rc} reviews, {r:g} stars) and noticed "
+                   f"there's no website for people to land on.")
     else:
-        opener = f"I came across {name} while looking at {friendly} businesses in {neighborhood}. You don't have a website yet — and that's costing you customers every day."
+        noticed = (f"I came across {name} while looking at {friendly} businesses in "
+                   f"{neighborhood} and noticed there's no website yet.")
 
-    # ── Review hook (only if meaningful data) ────────────────────────────
-    review_hook = ""
-    if rc >= 50:
-        review_hook = f"You have {rc} people who already trust {name}. A website turns those reviews into referrals — new customers who find you on Google because your happy customers sent them.\n\n"
-    elif rc >= 10:
-        review_hook = f"With {rc} Yelp reviews, you've already proven the business works. A website just makes sure new customers can actually find it.\n\n"
-
-    # ── Category-specific pain point ──────────────────────────────────────
-    pain_raw  = _CAT_PAIN.get(cat, _DEFAULT_PAIN)
-    pain_point = pain_raw.replace("{neighborhood}", neighborhood).replace("{name}", name).replace("{type}", friendly)
-
-    # ── P.S. line ────────────────────────────────────────────────────────
-    ps_raw  = _CAT_PS.get(cat, _DEFAULT_PS)
-    ps_line = ps_raw.replace("{neighborhood}", neighborhood).replace("{name}", name).replace("{type}", friendly)
-
-    # ── Add UTM params to mockup URL for click attribution ────────────────
     utm_url = mockup_url
     if mockup_url and mockup_url.startswith("http"):
         utm_cat = _re.sub(r"[^a-z0-9]+", "-", cat) if cat else "general"
         utm_url = mockup_url + "?" + _up.urlencode({
-            "utm_source":   "email",
-            "utm_medium":   "outreach",
-            "utm_campaign": utm_cat,
-            "utm_content":  _dt.date.today().isoformat(),
+            "utm_source": "email", "utm_medium": "outreach",
+            "utm_campaign": utm_cat, "utm_content": _dt.date.today().isoformat(),
         })
 
-    # ── Mockup hero (table row — injected into card) ─────────────────────
-    mockup_hero_plain = ""
-    mockup_hero_tr    = ""
+    unsub = _UNSUB_BASE + ("?email=" + _up.quote(to_email) if to_email else "")
+    ask = "Want me to send over what it would take to get it live?"
+
+    lines = [
+        "Hi there,",
+        f"I'm Maya, a web designer here in Philly. {noticed}",
+    ]
     if utm_url:
-        mockup_hero_plain = f"Here's the preview I built for you:\n{utm_url}\n\n"
+        lines.append("So I put together a quick preview of what one could look like, "
+                     "using your real business info:")
+        lines.append(utm_url)
+    lines.append("If you like it, I can have it live in about a week, starting at $499, "
+                 "and the site is yours. No monthly builder fees, and everything happens "
+                 "over email.")
+    lines.append(ask)
 
-        mockup_hero_tr = (
-            '<tr><td style="background:#111111;padding:28px 36px;text-align:center;">'
-            f'<p style="margin:0 0 14px;font-size:10px;font-weight:700;letter-spacing:3px;'
-            f'text-transform:uppercase;color:#C9A96E;font-family:Arial,sans-serif;">'
-            f'I built this for {name}</p>'
-            + f'<a href="{utm_url}" style="display:inline-block;background:#C9A96E;color:#0d0d0d;'
-            f'padding:14px 36px;border-radius:6px;font-weight:800;font-size:15px;'
-            f'font-family:Arial,sans-serif;text-decoration:none;letter-spacing:0.4px;">'
-            '&#128064;&nbsp;&nbsp;See Your Website Preview &rarr;</a>'
-            '<p style="margin:12px 0 0;font-size:11px;color:#555;font-family:Arial,sans-serif;">'
-            'Takes 30 seconds &nbsp;&middot;&nbsp; No sign-up needed</p>'
-            '</td></tr>'
-        )
-
-    # ── Social proof (inline pull-quote, plain text + HTML) ──────────────
-    social_proof_plain = ""
-    social_proof_html  = ""
-    if rc >= 5 and r >= 4.0:
-        stars = f"{r:g}★"
-        rev   = f", {rc} Yelp reviews" if rc > 0 else ""
-        social_proof_plain = f"{name} — {stars}{rev}. You've built something real. Let's make sure people can find it.\n\n"
-        social_proof_html  = (
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
-            ' style="margin:0 0 20px;">'
-            '<tr><td style="border-left:3px solid #C9A96E;padding:10px 16px;background:#faf9f7;'
-            'border-radius:0 4px 4px 0;">'
-            f'<p style="margin:0;font-size:13px;color:#666666;font-style:italic;'
-            f'line-height:1.65;font-family:Arial,sans-serif;">'
-            f'<strong style="color:#1a1a1a;">{name}</strong> &mdash; '
-            f'<strong style="color:#1a1a1a;">{r:g}&#9733;</strong>'
-            + (f'&nbsp;<strong style="color:#1a1a1a;">{rc} Yelp reviews</strong>' if rc > 0 else '')
-            + ". You've built something real. Let's make sure people can find it.</p>"
-            '</td></tr></table>'
-        )
-
-    plain = EMAIL_PLAIN_TEMPLATE.format(
-        business_name=name,
-        business_type=friendly,
-        city=city_display,
-        mockup_hero=mockup_hero_plain,
-        opener=opener,
-        review_hook=review_hook,
-        pain_point=pain_point,
-        ps_line=ps_line,
-        social_proof=social_proof_plain,
+    plain = "\n\n".join(lines) + (
+        "\n\nMaya Sierra\nWebByMaya · webbymaya.com"
+        f"\n\n{offer.BUSINESS_ADDRESS}\nUnsubscribe: {unsub}"
     )
 
-    review_hook_html = _ep(review_hook.strip()) if review_hook.strip() else ""
+    def _p(t: str) -> str:
+        return ('<p style="margin:0 0 14px;font-size:15px;line-height:1.55;'
+                f'color:#222;font-family:Arial,sans-serif;">{t}</p>')
 
-    body = (
-        social_proof_html
-        + _ep(opener)
-        + review_hook_html
-        + _ep(pain_point)
-        + _ep(
-            f"I'm Maya, a web designer based in Philly. I built {name} a free preview — "
-            f"<strong>starting at $499</strong>, live in 7 days. Includes a <strong>free domain + 1 year of hosting</strong>, "
-            f"SSL &amp; full setup — no tech work on your end. After year one, hosting &amp; maintenance is just $29/mo."
-        )
-        + _ecta("", f'Just reply <span style="color:#C9A96E;">YES</span> to this email and I\'ll send everything over.', dark=True)
-        + _ep(f"P.S. {ps_line}", muted=True, small=True, italic=True)
-    )
+    parts = [_p(lines[0]), _p(lines[1])]
+    if utm_url:
+        parts.append(_p(lines[2]))
+        parts.append(_p(f'<a href="{utm_url}" style="color:#1a56db;">See the preview for {name}</a>'))
+    parts.append(_p(lines[-2]))
+    parts.append(_p(ask))
+    parts.append(_p("Maya Sierra<br>WebByMaya · "
+                    '<a href="https://webbymaya.com" style="color:#1a56db;">webbymaya.com</a>'))
+    parts.append('<p style="margin:18px 0 0;font-size:11px;color:#999;font-family:Arial,sans-serif;">'
+                 f'{offer.BUSINESS_ADDRESS} · <a href="{unsub}" style="color:#999;">Unsubscribe</a></p>')
 
-    # Cold outreach email has an optional dark hero band — can't use plain html_card()
-    html = (
-        '<!DOCTYPE html><html><head>'
-        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-        '</head><body style="margin:0;padding:0;background:#f0ede8;">'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0ede8;">'
-        '<tr><td align="center" style="padding:28px 12px;">'
-        '<table role="presentation" width="600" cellpadding="0" cellspacing="0"'
-        ' style="max-width:600px;width:100%;background:#ffffff;border-radius:10px;'
-        'overflow:hidden;border:1px solid #e4dfd8;">'
-        '<tr><td style="background:#C9A96E;height:3px;font-size:0;line-height:3px;">&nbsp;</td></tr>'
-        '<tr><td style="padding:22px 36px 0;">'
-        '<p style="margin:0;font-size:10px;font-weight:700;letter-spacing:3px;'
-        'text-transform:uppercase;color:#C9A96E;font-family:Arial,sans-serif;">WebByMaya</p>'
-        '</td></tr>'
-        + mockup_hero_tr
-        + '<tr><td style="padding:26px 36px 30px;">'
-        + body
-        + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">'
-        '<tr><td style="border-top:1px solid #eeeeee;padding-top:16px;">'
-        '<p style="margin:0 0 5px;font-size:12px;color:#bbbbbb;font-family:Arial,sans-serif;line-height:1.9;">'
-        'Maya Sierra &nbsp;&middot;&nbsp; '
-        '<a href="https://webbymaya.com" style="color:#C9A96E;text-decoration:none;font-weight:600;">'
-        'WebByMaya.com</a> &nbsp;&middot;&nbsp; maya@webbymaya.com</p>'
-        + f'<p style="margin:0;font-size:11px;color:#cccccc;font-family:Arial,sans-serif;">'
-        f'{offer.BUSINESS_ADDRESS} &nbsp;&middot;&nbsp; '
-        f'<a href="{_UNSUB_BASE + ("?email=" + __import__("urllib.parse", fromlist=["quote"]).quote(to_email) if to_email else "")}" '
-        f'style="color:#cccccc;text-decoration:underline;">Unsubscribe</a></p>'
-        + '</td></tr></table>'
-        '</td></tr></table></td></tr></table></body></html>'
-    )
-
+    html = ('<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+            '<body style="margin:0;padding:16px;background:#ffffff;">'
+            '<div style="max-width:560px;">' + "".join(parts) + '</div></body></html>')
     return plain, html
 
 
