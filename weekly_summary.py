@@ -28,30 +28,29 @@ def load_all(pattern):
 
 
 def send_email(subject: str, plain: str, html: str):
-    if not SENDGRID_KEY:
-        print("SENDGRID_API_KEY not set — skipping weekly email")
-        return
-    payload = json.dumps({
-        "personalizations": [{"to": [{"email": TO_EMAIL}]}],
-        "from": {"email": FROM_EMAIL, "name": FROM_NAME},
-        "subject": subject,
-        "content": [
-            {"type": "text/plain", "value": plain},
-            {"type": "text/html",  "value": html},
-        ],
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.sendgrid.com/v3/mail/send",
-        data=payload,
-        headers={"Authorization": f"Bearer {SENDGRID_KEY}",
-                 "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        urllib.request.urlopen(req)
-        print("Weekly summary emailed.")
-    except urllib.error.HTTPError as e:
-        print(f"SendGrid error {e.code}: {e.read().decode()}")
+    # SendGrid has had zero credits since 2026-07-27, so this went out as a
+    # 401 every Monday. Use the outreach sender's Brevo chain instead.
+    import sys
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from batch_send_outreach import send_email as _send
+    ok, provider = _send(TO_EMAIL, subject, plain, html)
+    print(f"Weekly summary emailed via {provider}." if ok else "Weekly summary send FAILED.")
+
+
+def cloud_email_counts(since: str):
+    """(this_week, all_time) cold sends from Supabase email_log. Local
+    send_log_*.csv stopped on 08-09 when cold sending moved to the cloud."""
+    import sys
+    sys.path.insert(0, str(SCRIPT_DIR))
+    import sb
+    def count(extra):
+        req = urllib.request.Request(
+            f"{sb.SUPABASE_URL}/rest/v1/email_log?select=id&status=eq.sent{extra}",
+            headers={"apikey": sb.ANON_KEY, "Authorization": f"Bearer {sb.ANON_KEY}",
+                     "Prefer": "count=exact", "Range": "0-0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return int(r.headers["Content-Range"].split("/")[-1])
+    return count(f"&sent_at=gte.{since}"), count("")
 
 
 def main():
@@ -60,7 +59,7 @@ def main():
 
     send_logs     = load_all("send_log_*.csv")
     sms_logs      = load_all("sms_log_*.csv")
-    followup_logs = load_all("email_followup_log_*.csv")
+    followup_logs = load_all("email_followup_log_*.csv") + load_all("followup_log_*.csv")
     bounces       = load_all("bounce_log.csv") if (SCRIPT_DIR / "bounce_log.csv").exists() else []
 
     # This week
@@ -72,6 +71,11 @@ def main():
     emails_all = sum(1 for r in send_logs if r.get("status") == "sent")
     sms_all    = sum(1 for r in sms_logs  if r.get("status") == "sent")
     fu_all     = sum(1 for r in followup_logs if r.get("status") == "sent")
+
+    try:
+        emails_wk, emails_all = cloud_email_counts(week_ago)
+    except Exception as e:
+        print(f"Could not read cloud send counts, using local logs: {e}")
 
     # Zone progress
     zone_state = SCRIPT_DIR / "zone_state.json"

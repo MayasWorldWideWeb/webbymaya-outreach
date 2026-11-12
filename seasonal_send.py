@@ -22,7 +22,8 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from batch_send_outreach import send_email, html_card, _ep, _ecta, clean_business_name
+from batch_send_outreach import (send_email, html_card, _ep, _ecta, clean_business_name,
+                                 domain_has_site, ALREADY_SENT_EMAILS, SENT_HISTORY_ERROR)
 from enrich_emails import _email_belongs_to_biz
 
 def _seasonal_html(hook: str, pitch: str, email: str = "") -> str:
@@ -255,7 +256,8 @@ def _load_seasonal_log() -> set:
         with open(p, newline="", encoding="utf-8", errors="replace") as f:
             for row in csv.DictReader(f):
                 em = (row.get("email") or "").strip().lower()
-                if em:
+                # A dry run logs too; it must not block the real send.
+                if em and str(row.get("dry_run", "")).lower() != "true":
                     sent.add(em)
     return sent
 
@@ -340,7 +342,10 @@ def main():
         print(f"[seasonal] No active campaigns for {today}.")
         return
 
-    already_sent     = _load_send_logs()
+    if SENT_HISTORY_ERROR and not args.dry_run:
+        sys.exit(f"[seasonal] Could not load sent history ({SENT_HISTORY_ERROR}) — not sending.")
+    # Local send logs end at 08-09; the Supabase log covers the cloud sends too.
+    already_sent     = _load_send_logs() | ALREADY_SENT_EMAILS
     already_seasonal = _load_seasonal_log()
     opt_outs         = _load_opt_outs()
     suppressed       = _load_suppressed()      # bounces + unsubscribes (CAN-SPAM)
@@ -358,6 +363,11 @@ def main():
             and (l.get("email","") or "").strip()
             and _email_belongs_to_biz((l.get("email","") or "").strip(),
                                       l.get("name","") or l.get("business_name",""))
+            # The pitch is "you have no website". The 10/31 holiday batch went
+            # to FashionGo, Sunday, fatty15 and two universities — all with
+            # sites, all wasted sends that read as spam.
+            and not (l.get("website","") or "").strip()
+            and not domain_has_site((l.get("email","") or "").strip())
         ]
         print(f"[seasonal] {len(targets)} eligible leads for {campaign['label']}")
 

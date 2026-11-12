@@ -128,3 +128,29 @@ def log_inbound(twilio_sid, from_number, body, received_at, kind):
         "kind":         kind,
         "notified":     False,
     }])
+
+def sb_sent_contacts(exclude_notes=()):
+    """{address: business name} for every status=sent row in email_log.
+
+    The cloud runner is a fresh checkout with no send_log_*.csv history, so
+    this is the only record of who was pitched there. Raises on any fetch
+    error — an empty result would mean re-pitching everyone.
+    """
+    exclude = {n.lower() for n in exclude_notes}
+    sent, offset, page = {}, 0, 1000
+    while True:
+        url = (f"{SUPABASE_URL}/rest/v1/email_log?select=email_sent_to,name,notes"
+               f"&status=eq.sent&order=id.asc&limit={page}&offset={offset}")
+        req = urllib.request.Request(url, headers={"apikey": ANON_KEY,
+                                                   "Authorization": f"Bearer {ANON_KEY}"})
+        rows = json.loads(urllib.request.urlopen(req, timeout=20).read())
+        for r in rows:
+            e = (r.get("email_sent_to") or "").strip().lower()
+            if e and (r.get("notes") or "").strip().lower() not in exclude:
+                sent[e] = (r.get("name") or "").strip()
+        if len(rows) < page:
+            return sent
+        offset += page
+
+def sb_sent_emails(exclude_notes=()):
+    return set(sb_sent_contacts(exclude_notes))

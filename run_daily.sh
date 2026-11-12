@@ -9,9 +9,11 @@ PYTHON=/usr/bin/python3
 TODAY=$(date +%Y-%m-%d)
 
 # Wait for network — Mac cron runs before Wi-Fi is ready; DNS fails silently
-for _i in 1 2 3 4 5 6; do
-    if /usr/bin/curl -sf --max-time 5 "https://8.8.8.8" > /dev/null 2>&1 || \
-       /usr/bin/curl -sf --max-time 5 "https://api.yelp.com" > /dev/null 2>&1; then
+# Checks a hostname, not an IP: the 11/7-11/9 failures were DNS, which an IP
+# probe passes straight through. Up to 5 minutes.
+for _i in $(seq 1 30); do
+    if /usr/bin/curl -s -o /dev/null --max-time 5 "https://oauth2.googleapis.com/" && \
+       /usr/bin/curl -s -o /dev/null --max-time 5 "https://ycsauzlqsjjbusugshpz.supabase.co/"; then
         break
     fi
     sleep 10

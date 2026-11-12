@@ -95,17 +95,24 @@ def gmail_ok():
     """Return True if the Gmail refresh token still works."""
     if not GMAIL_TOKEN.exists():
         return False
-    try:
-        tok = json.loads(GMAIL_TOKEN.read_text())
-        data = urllib.parse.urlencode({
-            "client_id": tok["client_id"], "client_secret": tok["client_secret"],
-            "refresh_token": tok["refresh_token"], "grant_type": "refresh_token",
-        }).encode()
-        urllib.request.urlopen(urllib.request.Request(
-            "https://oauth2.googleapis.com/token", data=data), timeout=15)
-        return True
-    except Exception:
-        return False
+    tok = json.loads(GMAIL_TOKEN.read_text())
+    data = urllib.parse.urlencode({
+        "client_id": tok["client_id"], "client_secret": tok["client_secret"],
+        "refresh_token": tok["refresh_token"], "grant_type": "refresh_token",
+    }).encode()
+    # Nov 2/7/8/9 "failures" were DNS errors (no network yet), not a dead
+    # token. Retry, and only an actual 4xx from Google means the token died.
+    for attempt in range(3):
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                "https://oauth2.googleapis.com/token", data=data), timeout=15)
+            return True
+        except urllib.error.HTTPError:
+            return False
+        except Exception:
+            import time
+            time.sleep(15 * (attempt + 1))
+    return False
 
 
 def assess():

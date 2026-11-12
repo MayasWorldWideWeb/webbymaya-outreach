@@ -5,7 +5,7 @@ Runs every 5 minutes via LaunchAgent.
 Notifies Maya (Mac popup + personal SMS) when a real reply comes in.
 Watches: SMS replies (Twilio) + email replies (Gmail inbox).
 """
-import base64, json, os, subprocess, urllib.request, urllib.parse, urllib.error
+import base64, json, os, subprocess, time, urllib.request, urllib.parse, urllib.error
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -152,31 +152,43 @@ def save_seen(path: Path, seen: set):
 # ── Gmail helpers ─────────────────────────────────────────────────────────────
 
 def gmail_access_token() -> str:
+    """A valid access token, or "" if one can't be had right now.
+
+    Never hands back an expired token: when the refresh failed (usually no
+    network yet at wake), the old code returned the stale one and every
+    Gmail call answered 401, which looked like a dead token.
+    """
     if not GMAIL_TOKEN.exists():
         return ""
     tok = json.loads(GMAIL_TOKEN.read_text())
-    access = tok.get("token","")
     try:
         exp = datetime.fromisoformat(tok["expiry"].replace("Z","+00:00"))
-        if datetime.now(timezone.utc) >= exp - timedelta(seconds=60):
-            data = urllib.parse.urlencode({
-                "client_id":     tok["client_id"],
-                "client_secret": tok["client_secret"],
-                "refresh_token": tok["refresh_token"],
-                "grant_type":    "refresh_token",
-            }).encode()
+    except Exception:
+        exp = datetime.now(timezone.utc)
+    if datetime.now(timezone.utc) < exp - timedelta(seconds=60):
+        return tok.get("token","")
+    data = urllib.parse.urlencode({
+        "client_id":     tok["client_id"],
+        "client_secret": tok["client_secret"],
+        "refresh_token": tok["refresh_token"],
+        "grant_type":    "refresh_token",
+    }).encode()
+    for attempt in range(3):
+        try:
             resp = json.loads(urllib.request.urlopen(
                 urllib.request.Request("https://oauth2.googleapis.com/token", data=data),
                 timeout=10).read())
-            access = resp["access_token"]
-            tok["token"]  = access
+            tok["token"]  = resp["access_token"]
             tok["expiry"] = (datetime.now(timezone.utc) +
                              timedelta(seconds=resp.get("expires_in",3600))
                              ).strftime("%Y-%m-%dT%H:%M:%SZ")
             GMAIL_TOKEN.write_text(json.dumps(tok))
-    except Exception:
-        pass
-    return access
+            return tok["token"]
+        except Exception as e:
+            err = e
+            time.sleep(10 * (attempt + 1))
+    print(f"[gmail] token refresh failed: {err}")
+    return ""
 
 
 def load_emailed_addresses() -> set:
@@ -193,6 +205,13 @@ def load_emailed_addresses() -> set:
                             addrs.add(e)
         except Exception:
             pass
+    # Cold sends moved to the cloud on 08-09 and only land in Supabase, so
+    # without this no reply from anyone pitched since then could alert.
+    try:
+        from sb import sb_sent_emails
+        addrs |= sb_sent_emails()
+    except Exception as e:
+        print(f"[gmail] could not load cloud recipients: {e}")
     # Also include clicker followup addresses
     for p in sorted(SEND_LOG_DIR.glob("clicker_followup_log_*.csv")):
         try:

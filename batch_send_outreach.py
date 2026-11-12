@@ -146,8 +146,18 @@ def _load_all_sent() -> set:
                     e = row.get("email_sent_to", "").strip().lower()
                     if e:
                         sent.add(e)
+    # Local logs stop at 08-09, when cold sending moved to the cloud runner —
+    # which has no local history at all. Without the Supabase log, the same
+    # business got a "new" cold pitch on 3 consecutive days (11/09-11/11).
+    try:
+        from sb import sb_sent_emails
+        sent |= sb_sent_emails(exclude_notes=_FAILED_SEND_PROVIDERS)
+    except Exception as e:
+        global SENT_HISTORY_ERROR
+        SENT_HISTORY_ERROR = str(e)
     return sent
 
+SENT_HISTORY_ERROR = ""
 ALREADY_SENT_EMAILS = _load_all_sent()
 
 _DISPOSABLE_DOMAINS = None  # type: Optional[set]
@@ -1639,6 +1649,9 @@ def main():
     if args.no_verify:
         VERIFY_MAILBOXES = False
     today_str = datetime.date.today().strftime("%Y-%m-%d")
+    if SENT_HISTORY_ERROR and not args.dry_run:
+        sys.exit(f"Could not load sent history from Supabase ({SENT_HISTORY_ERROR}). "
+                 "Refusing to send — every past recipient would look new.")
 
     # ---- Load prospects ---------------------------------------------------
     if args.input.lower() == "notion":

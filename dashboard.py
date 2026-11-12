@@ -1155,7 +1155,6 @@ def send_proposal_email(name, email, category):
 
 def send_weekly_digest():
     """Send Maya a weekly performance summary. Called from cron on Sundays."""
-    if not SG: return
     try:
         data      = build_dataset()
         hot       = data.get("clicker_leads", [])
@@ -1193,17 +1192,12 @@ def send_weekly_digest():
   </div>
   <p style="color:#aaa;font-size:12px">Sent automatically by your WebByMaya dashboard every Sunday.</p>
 </div>"""
-        payload = json.dumps({
-            "personalizations": [{"to": [{"email": "mayasierra1999@gmail.com"}]}],
-            "from":    {"email": "maya@webbymaya.com", "name": "WebByMaya"},
-            "subject": f"Weekly Digest — ${month_rev:,.0f} earned, {len(hot)} hot leads",
-            "content": [{"type": "text/html", "value": html}]
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.sendgrid.com/v3/mail/send", data=payload,
-            headers={"Authorization": f"Bearer {SG}", "Content-Type": "application/json"},
-            method="POST")
-        urllib.request.urlopen(req, timeout=10)
+        # Was SendGrid, which has had zero credits since 2026-07-27.
+        from batch_send_outreach import send_email as _send
+        ok, provider = _send("mayasierra1999@gmail.com",
+                             f"Weekly Digest — ${month_rev:,.0f} earned, {len(hot)} hot leads",
+                             "WebByMaya weekly digest — open in an HTML mail client.", html)
+        print(f"[digest] {'sent via ' + provider if ok else 'send FAILED'}")
     except Exception as e:
         print(f"[digest] Failed: {e}")
 

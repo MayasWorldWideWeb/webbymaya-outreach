@@ -84,6 +84,13 @@ def load_contacted_emails() -> dict:
                 name  = row.get("name", "").strip()
                 if email:
                     contacts[email] = name
+    # Cloud sends (08-09 on) are only in Supabase.
+    try:
+        from sb import sb_sent_contacts
+        for email, name in sb_sent_contacts().items():
+            contacts.setdefault(email, name)
+    except Exception as e:
+        print(f"Could not load cloud recipients: {e}")
     return contacts
 
 
