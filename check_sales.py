@@ -25,7 +25,15 @@ ENV_FILE     = Path.home() / "Projects/jarvis/.env.local"
 
 # The $499 WebByMaya website Payment Link (isolates our sales from ClassArena/JARVIS
 # on the same Stripe account).
-PAYMENT_LINK_ID = "plink_1TxulxAJ84QZjwZkz9kFD8iz"
+# Previews have pointed at the $250 deposit link since it replaced the $499
+# one; this watched only the old link, so a deposit would never have been
+# noticed. Every WebByMaya link is listed — label says what the payment is.
+PAYMENT_LINKS = {
+    "plink_1UIua5AJ84QZjwZk7U5ZkCXQ": "deposit",   # $250 to start (what previews use)
+    "plink_1TxulxAJ84QZjwZkz9kFD8iz": "full",      # original $499
+    "plink_1UIua6AJ84QZjwZkOK6S1uhk": "balance",   # $249 at launch
+}
+PREVIEW_BASE = "https://mayasworldwideweb.github.io/previews"
 
 # Where sale alerts go.
 ALERT_EMAILS = ["maya@webbymaya.com", "mayasierra1999@gmail.com"]
@@ -70,19 +78,24 @@ def _mac_notify(title: str, body: str):
 
 # ---- Email bodies --------------------------------------------------------
 
-def _alert_maya(buyer_email: str, buyer_name: str, amount: str, dry_run: bool):
-    subj  = f"💰 NEW SALE — {amount} from {buyer_name or buyer_email}"
+def _alert_maya(buyer_email: str, buyer_name: str, amount: str, dry_run: bool,
+                kind: str = "", preview: str = "", phone: str = ""):
+    subj  = f"💰 NEW SALE — {amount} {kind} from {buyer_name or buyer_email}"
     plain = (f"You made a sale!\n\n"
-             f"Amount:  {amount}\n"
+             f"Amount:  {amount} ({kind})\n"
              f"Buyer:   {buyer_name or '(no name)'}\n"
-             f"Email:   {buyer_email}\n\n"
+             f"Email:   {buyer_email}\n"
+             f"Phone:   {phone or '-'}\n"
+             f"Preview: {preview or '(paid without a preview link)'}\n\n"
              f"They've been auto-sent the intake form ({offer.BOOKING_URL}).\n"
              f"Next step: build their site and get it live in 7 days.\n\n"
              f"— WebByMaya automation")
     html  = (f'<div style="font-family:Arial,sans-serif;color:#333;max-width:520px">'
              f'<h2 style="color:#1a7f37">💰 New sale — {amount}</h2>'
              f'<p><strong>Buyer:</strong> {buyer_name or "(no name)"}<br>'
-             f'<strong>Email:</strong> {buyer_email}</p>'
+             f'<strong>Email:</strong> {buyer_email}<br>'
+             f'<strong>Payment:</strong> {kind}<br>'
+             f'<strong>Preview:</strong> {preview or "(none)"}</p>'
              f'<p>They\'ve been auto-sent the intake form. Next step: build their site '
              f'and get it live in 7 days.</p></div>')
     for to in ALERT_EMAILS:
@@ -127,9 +140,12 @@ def process_sales(dry_run: bool = False) -> int:
         return 0
 
     seen = _load_state()
-    data = _stripe_get("checkout/sessions", key,
-                       {"payment_link": PAYMENT_LINK_ID, "limit": 50})
-    sessions = data.get("data", [])
+    sessions = []
+    for link_id, kind in PAYMENT_LINKS.items():
+        data = _stripe_get("checkout/sessions", key, {"payment_link": link_id, "limit": 50})
+        for sess in data.get("data", []):
+            sess["_kind"] = kind
+            sessions.append(sess)
     new_count = 0
 
     for s in sessions:
@@ -150,11 +166,19 @@ def process_sales(dry_run: bool = False) -> int:
         tag = "[DRY RUN] " if dry_run else ""
         print(f"  {tag}NEW SALE: {amount} from {buyer_name or '(no name)'} <{buyer_email}>")
 
-        _alert_maya(buyer_email, buyer_name, amount, dry_run)
-        _welcome_buyer(buyer_email, buyer_name, dry_run)
+        # Previews pass their own slug as client_reference_id, so we know
+        # which business paid without having to ask.
+        ref     = (s.get("client_reference_id") or "").strip()
+        preview = f"{PREVIEW_BASE}/{ref}.html" if ref else ""
+        kind    = s["_kind"]
+        _alert_maya(buyer_email, buyer_name, amount, dry_run, kind, preview,
+                    (details.get("phone") or ""))
+        if kind != "balance":   # balance = already a client, no intake needed
+            _welcome_buyer(buyer_email, buyer_name, dry_run)
 
         if not dry_run:
-            seen[sid] = {"email": buyer_email, "name": buyer_name, "amount": amount}
+            seen[sid] = {"email": buyer_email, "name": buyer_name, "amount": amount,
+                         "kind": kind, "preview": preview}
         new_count += 1
 
     if not dry_run:

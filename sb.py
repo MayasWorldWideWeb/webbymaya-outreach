@@ -143,7 +143,14 @@ def sb_sent_contacts(exclude_notes=()):
                f"&status=eq.sent&order=id.asc&limit={page}&offset={offset}")
         req = urllib.request.Request(url, headers={"apikey": ANON_KEY,
                                                    "Authorization": f"Bearer {ANON_KEY}"})
-        rows = json.loads(urllib.request.urlopen(req, timeout=20).read())
+        for attempt in range(3):
+            try:
+                rows = json.loads(urllib.request.urlopen(req, timeout=30).read())
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                import time; time.sleep(5 * (attempt + 1))
         for r in rows:
             e = (r.get("email_sent_to") or "").strip().lower()
             if e and (r.get("notes") or "").strip().lower() not in exclude:

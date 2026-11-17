@@ -597,6 +597,13 @@ def _load_contacted() -> dict:
                 if row.get("status") == "sent":
                     e = row.get("email_sent_to", "").strip().lower()
                     if e: contacts[e] = row.get("name", e)
+    # Cold sends moved to the cloud on 08-09 and are only in Supabase.
+    try:
+        from sb import sb_sent_contacts
+        for e, name in sb_sent_contacts().items():
+            contacts.setdefault(e, name or e)
+    except Exception as e:
+        print(f"  [auto_reply] could not load cloud recipients: {e}")
     return contacts
 
 
@@ -635,25 +642,29 @@ def process_gmail_replies(dry_run: bool = False) -> int:
     msg_ids = data[0].split() if data[0] else []
 
     for num in msg_ids:
-        _, msg_data = imap.fetch(num, "(RFC822)")
-        raw = msg_data[0][1]
-        msg = _email.message_from_bytes(raw)
+        # PEEK so reading doesn't mark anything read. The old RFC822 fetch plus
+        # an explicit \\Seen on every non-prospect hid all other unread mail —
+        # a buyer writing from a new address would have been buried.
+        _, hdr_data = imap.fetch(num, "(BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID)])")
+        hdr = _email.message_from_bytes(hdr_data[0][1])
 
-        raw_from = msg.get("From", "")
+        raw_from = hdr.get("From", "")
         if "<" in raw_from:
             from_email = raw_from.split("<")[1].rstrip(">").strip().lower()
         else:
             from_email = raw_from.strip().lower()
 
-        # Only process if it's from someone we emailed
+        # Only process if it's from someone we emailed; leave the rest unread.
         if from_email not in contact_set:
-            # Mark as seen so we don't reprocess, but skip
-            imap.store(num, "+FLAGS", "\\Seen")
             continue
 
-        uid = f"imap:{num.decode()}"
+        # Message-ID, not the IMAP sequence number — those shift as mail moves.
+        uid = "msgid:" + (hdr.get("Message-ID") or f"imap:{num.decode()}").strip()
         if uid in replied:
             continue
+
+        _, msg_data = imap.fetch(num, "(BODY.PEEK[])")
+        msg = _email.message_from_bytes(msg_data[0][1])
 
         # Guard 1: never auto-reply to an autoresponder / bulk mailer.
         if _is_automated(msg, from_email):

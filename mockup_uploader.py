@@ -1682,6 +1682,9 @@ document.getElementById('leadForm').addEventListener('submit', function(e) {{
 <script>
 (function(){{
   try{{
+    // Tag checkout with this preview's slug so the sale arrives knowing which business paid.
+    var slug = (location.pathname.split("/").pop() || "").replace(/\\.html$/, "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 200);
+    var ref = slug ? "?client_reference_id=" + slug : "";
     fetch("https://mayasworldwideweb.github.io/previews/offer.json",{{cache:"no-store"}})
       .then(function(r){{ return r.json(); }})
       .then(function(o){{
@@ -1689,7 +1692,7 @@ document.getElementById('leadForm').addEventListener('submit', function(e) {{
           var k = el.getAttribute("data-offer"); if (o[k] != null) el.textContent = o[k];
         }});
         document.querySelectorAll("[data-offer-href]").forEach(function(el){{
-          var k = el.getAttribute("data-offer-href"); if (o[k]) el.setAttribute("href", o[k]);
+          var k = el.getAttribute("data-offer-href"); if (o[k]) el.setAttribute("href", o[k] + (k === "checkout" ? ref : ""));
         }});
       }}).catch(function(){{}});
   }}catch(e){{}}
