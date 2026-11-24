@@ -54,7 +54,17 @@ OPTOUT_WORDS = [
     "not interested", "no thanks", "please stop", "take me off",
     "opt out", "opt-out", "don't contact", "do not contact",
     "do not email", "don't email",
+    # Complaints. Someone threatening to report us wants off the list just as
+    # much as someone who says "unsubscribe" — 2026-11-22 a recipient replied
+    # "REPORTING YOU TO THE FCC" and none of the words above matched it.
+    "take us off", "remove us", "remove my", "stop emailing", "stop sending",
+    "stop contacting", "leave me alone", "leave us alone", "how did you get my",
+    "how did you get our", "who gave you", "reporting you", "report you",
+    "reported you", "better business bureau", "cease and desist", "attorney",
+    "lawyer", "harass", "spam", "scam",
 ]
+# Short acronyms checked on word boundaries so they don't hit inside other words.
+OPTOUT_RE = re.compile(r"\b(fcc|ftc|bbb|can-?spam|sue)\b", re.I)
 ALREADY_HAS_SITE_WORDS = [
     "already have a website", "already have one", "we have a website",
     "we have a site", "have a website", "have a web", "have one already",
@@ -79,7 +89,7 @@ def _classify(text: str) -> str:
       other          — unclear, flag for manual review
     """
     t = text.lower()
-    if any(w in t for w in OPTOUT_WORDS):
+    if any(w in t for w in OPTOUT_WORDS) or OPTOUT_RE.search(t):
         return "optout"
     if any(w in t for w in ALREADY_HAS_SITE_WORDS):
         return "already_has_site"
@@ -637,16 +647,37 @@ def process_gmail_replies(dry_run: bool = False) -> int:
     # Search for any unseen messages from addresses we contacted
     contact_set = set(contacts.keys())
 
-    # Fetch all UNSEEN messages (keep it fast)
-    _, data = imap.search(None, "UNSEEN")
+    # A reply often comes from a colleague, not the address we mailed: we sent
+    # to info@elongo.com and the "REPORTING YOU TO THE FCC. TAKE ME OFF" came
+    # from jmlongo@elongo.com — exact matching ignored it. Map business domains
+    # (never free-mail domains) back to the address(es) we actually contacted.
+    _FREE = {"gmail.com", "yahoo.com", "hotmail.com", "aol.com", "outlook.com",
+             "icloud.com", "comcast.net", "verizon.net", "msn.com", "live.com",
+             "me.com", "ymail.com", "att.net", "protonmail.com",
+             # platforms enrichment sometimes mis-attaches to a business
+             "github.com", "google.com", "facebook.com", "instagram.com",
+             "yelp.com", "wix.com", "squarespace.com", "godaddy.com",
+             "shopify.com", "sentry.io", "wordpress.com"}
+    domain_contacts = {}
+    for c in contact_set:
+        d = c.rsplit("@", 1)[-1]
+        if d not in _FREE:
+            domain_contacts.setdefault(d, []).append(c)
+
+    # Every message from the last 14 days, read or not. UNSEEN-only meant any
+    # reply Maya opened first was never processed — opt-outs included. The
+    # Message-ID state below keeps this from handling anything twice.
+    since = (datetime.date.today() - datetime.timedelta(days=14)).strftime("%d-%b-%Y")
+    _, data = imap.search(None, f"SINCE {since}")
     msg_ids = data[0].split() if data[0] else []
 
     for num in msg_ids:
         # PEEK so reading doesn't mark anything read. The old RFC822 fetch plus
         # an explicit \\Seen on every non-prospect hid all other unread mail —
         # a buyer writing from a new address would have been buried.
-        _, hdr_data = imap.fetch(num, "(BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID)])")
+        _, hdr_data = imap.fetch(num, "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM MESSAGE-ID)])")
         hdr = _email.message_from_bytes(hdr_data[0][1])
+        was_seen = b"\\Seen" in (hdr_data[0][0] or b"")
 
         raw_from = hdr.get("From", "")
         if "<" in raw_from:
@@ -654,9 +685,14 @@ def process_gmail_replies(dry_run: bool = False) -> int:
         else:
             from_email = raw_from.strip().lower()
 
-        # Only process if it's from someone we emailed; leave the rest unread.
-        if from_email not in contact_set:
+        # Only process if it's from someone we emailed (or their business
+        # domain); leave the rest unread.
+        contacted_addrs = [from_email] if from_email in contact_set else \
+            domain_contacts.get(from_email.rsplit("@", 1)[-1], [])
+        if not contacted_addrs:
             continue
+        if from_email not in contacts:
+            contacts[from_email] = contacts.get(contacted_addrs[0], from_email)
 
         # Message-ID, not the IMAP sequence number — those shift as mail moves.
         uid = "msgid:" + (hdr.get("Message-ID") or f"imap:{num.decode()}").strip()
@@ -676,6 +712,25 @@ def process_gmail_replies(dry_run: bool = False) -> int:
         body   = _imap_body(msg)
         intent = _classify(body)
         biz    = contacts.get(from_email, from_email)
+
+        # An opt-out covers the address we mailed too, not just the replier.
+        if intent == "optout" and not dry_run:
+            for a in contacted_addrs:
+                if a != from_email:
+                    add_suppression(email=a, reason="replied_unsubscribe")
+
+        # Already read by a human: they may have answered it themselves, so
+        # only act on opt-outs (suppress quietly, no auto-reply).
+        if was_seen and intent != "optout":
+            replied[uid] = {"intent": "seen_by_human", "email": from_email}
+            continue
+        if was_seen and intent == "optout":
+            print(f"  [opt-out, already read] {biz} <{from_email}> — suppressed, no reply")
+            if not dry_run:
+                add_suppression(email=from_email, reason="replied_unsubscribe")
+            replied[uid] = {"intent": "optout_silent", "email": from_email}
+            processed += 1
+            continue
 
         # Mark as seen in Gmail
         imap.store(num, "+FLAGS", "\\Seen")
@@ -754,7 +809,8 @@ def process_gmail_replies(dry_run: bool = False) -> int:
             _log_for_review(from_email, biz, body)
             processed += 1
 
-    _save_state(replied)
+    if not dry_run:
+        _save_state(replied)
     imap.logout()
     return processed
 
@@ -830,7 +886,8 @@ def process_twilio_sms(dry_run: bool = False) -> int:
             replied[key] = {"intent": "interest", "phone": from_phone}
             processed += 1
 
-    _save_state(replied)
+    if not dry_run:
+        _save_state(replied)
     return processed
 
 # ---------------------------------------------------------------------------
